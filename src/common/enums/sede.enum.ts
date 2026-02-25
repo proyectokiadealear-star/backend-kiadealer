@@ -1,0 +1,6 @@
+export enum SedeEnum {
+  SURMOTOR = 'SURMOTOR',
+  SHYRIS = 'SHYRIS',
+  GRANADAS_CENTENOS = 'GRANADAS_CENTENOS',
+  ALL = 'ALL',
+}
