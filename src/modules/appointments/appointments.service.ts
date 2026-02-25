@@ -117,9 +117,14 @@ export class AppointmentsService {
 
     if (changes.length && apt['vehicleId']) {
       await this.vehiclesService.assertExists(apt['vehicleId']);
-      await this.vehiclesService.addStatusHistory(apt['vehicleId'], VehicleStatus.AGENDADO, user, {
-        notes: `Reagendamiento por ${user.displayName ?? user.email}: ${changes.join(', ')}`,
-      });
+      await this.vehiclesService.addStatusHistory(
+        apt['vehicleId'],
+        VehicleStatus.AGENDADO,
+        VehicleStatus.AGENDADO,
+        user,
+        user.sede,
+        `Reagendamiento por ${user.displayName ?? user.email}: ${changes.join(', ')}`,
+      );
     }
 
     return { aptId, updated: true };

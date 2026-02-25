@@ -17,8 +17,12 @@ export class CatalogsService {
   }
 
   private async create(collection: string, data: Record<string, unknown>) {
+    // Normalize all string values to UPPERCASE before persisting
+    const normalized = Object.fromEntries(
+      Object.entries(data).map(([k, v]) => [k, typeof v === 'string' ? v.toUpperCase().trim() : v]),
+    );
     const id = uuidv4();
-    const itemData = { id, ...data, createdAt: this.firebase.serverTimestamp() };
+    const itemData = { id, ...normalized, createdAt: this.firebase.serverTimestamp() };
     await this.db.collection('catalogs').doc(collection).collection('items').doc(id).set(itemData);
     return itemData;
   }
@@ -27,7 +31,11 @@ export class CatalogsService {
     const ref = this.db.collection('catalogs').doc(collection).collection('items').doc(id);
     const snap = await ref.get();
     if (!snap.exists) throw new NotFoundException(`${collection}/${id} no encontrado`);
-    await ref.update({ ...data, updatedAt: this.firebase.serverTimestamp() });
+    // Normalize all string values to UPPERCASE before persisting
+    const normalized = Object.fromEntries(
+      Object.entries(data).map(([k, v]) => [k, typeof v === 'string' ? v.toUpperCase().trim() : v]),
+    );
+    await ref.update({ ...normalized, updatedAt: this.firebase.serverTimestamp() });
     return { id, updated: true };
   }
 
@@ -55,4 +63,10 @@ export class CatalogsService {
   // ── SEDES ─────────────────────────────────────────────────────────
   getSedes() { return this.getAll('sedes'); }
   createSede(name: string, code: string) { return this.create('sedes', { name, code }); }
+
+  // ── ACCESORIOS ────────────────────────────────────────────────────
+  getAccessories() { return this.getAll('accessories'); }
+  createAccessory(name: string, key: string) { return this.create('accessories', { name, key }); }
+  updateAccessory(id: string, name: string) { return this.update('accessories', id, { name }); }
+  deleteAccessory(id: string) { return this.remove('accessories', id); }
 }

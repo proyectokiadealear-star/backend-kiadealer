@@ -35,7 +35,7 @@ export class UpdateChecklistDto {
   @ApiProperty({
     description: 'Clave del accesorio a marcar',
     enum: AccessoryKey,
-    example: AccessoryKey.aros,
+    example: AccessoryKey.AROS,
   })
   @IsString()
   @IsNotEmpty()
@@ -57,7 +57,7 @@ export class ReopenOrderDto {
     type: [String],
     enum: AccessoryKey,
     isArray: true,
-    example: [AccessoryKey.alarma, AccessoryKey.neblineros],
+    example: [AccessoryKey.ALARMA, AccessoryKey.NEBLINEROS],
   })
   @IsArray()
   @ArrayMinSize(1)
