@@ -66,7 +66,8 @@ export class ServiceOrdersService {
     const predictions = await this.runPrediction(orderAccessories, dto.vehicleId);
 
     const orderId = uuidv4();
-    const orderNumber = this.generateOrderNumber(vehicle['sede'] as string);
+    // Usar número de orden proporcionado por el usuario, o generar uno automáticamente como fallback
+    const orderNumber = dto.orderNumber?.trim() || this.generateOrderNumber(vehicle['sede'] as string);
     const now = this.firebase.serverTimestamp();
 
     const orderData = {
@@ -85,6 +86,7 @@ export class ServiceOrdersService {
       isReopening: false,
       previousOrderId: null,
       createdBy: user.uid,
+      createdByName: user.displayName ?? user.email,
       createdAt: now,
       updatedAt: now,
     };
@@ -92,18 +94,30 @@ export class ServiceOrdersService {
     await this.db.collection('serviceOrders').doc(orderId).set(orderData);
 
     await this.vehiclesService.changeStatus(dto.vehicleId, VehicleStatus.ORDEN_GENERADA, user, {
-      extraFields: { currentOrderId: orderId },
+      notes: `OT ${orderNumber} generada por ${user.displayName ?? user.email}`,
+      extraFields: { currentOrderId: orderId, currentOrderNumber: orderNumber },
     });
 
-    await this.notificationsService.notify({
-      type: 'OT_GENERADA',
-      targetRole: RoleEnum.LIDER_TECNICO,
-      targetSede: vehicle['sede'],
-      title: '🔧 Nueva Orden de Trabajo generada',
-      body: `OT ${orderNumber} lista para asignación de técnico`,
-      vehicleId: dto.vehicleId,
-      chassis: vehicle['chassis'] as string,
-    });
+    await Promise.all([
+      this.notificationsService.notify({
+        type: 'OT_GENERADA',
+        targetRole: RoleEnum.LIDER_TECNICO,
+        targetSede: vehicle['sede'],
+        title: '🔧 Nueva Orden de Trabajo generada',
+        body: `OT ${orderNumber} lista para asignación de técnico — vehículo ${vehicle['chassis']}`,
+        vehicleId: dto.vehicleId,
+        chassis: vehicle['chassis'] as string,
+      }),
+      this.notificationsService.notify({
+        type: 'OT_GENERADA',
+        targetRole: RoleEnum.JEFE_TALLER,
+        targetSede: vehicle['sede'],
+        title: '🔧 Nueva Orden de Trabajo generada',
+        body: `OT ${orderNumber} generada para vehículo ${vehicle['chassis']}`,
+        vehicleId: dto.vehicleId,
+        chassis: vehicle['chassis'] as string,
+      }),
+    ]);
 
     this.logger.log(`OT creada: ${orderId} (${orderNumber})`);
 
@@ -137,12 +151,23 @@ export class ServiceOrdersService {
   }
 
   async assignTechnician(orderId: string, dto: AssignTechnicianDto, user: AuthenticatedUser) {
-    if (user.role !== RoleEnum.LIDER_TECNICO && user.role !== RoleEnum.JEFE_TALLER) {
+    if (user.role !== RoleEnum.LIDER_TECNICO && user.role !== RoleEnum.JEFE_TALLER && user.role !== RoleEnum.SOPORTE) {
       throw new ForbiddenException('Solo el Líder Técnico puede asignar técnicos');
     }
 
     const order = await this.findOne(orderId);
     const vehicle = await this.vehiclesService.assertExists(order!['vehicleId']);
+
+    const allowedOrderStatuses = ['GENERADA', 'ASIGNADA'];
+    if (!allowedOrderStatuses.includes(order!['status'])) {
+      throw new BadRequestException(
+        `La OT debe estar en estado GENERADA o ASIGNADA para asignar técnico. Estado actual: ${order!['status']}`,
+      );
+    }
+
+    const previousTechnicianId: string | null = order!['assignedTechnicianId'] ?? null;
+    const previousTechnicianName: string | null = order!['assignedTechnicianName'] ?? null;
+    const isReassignment = !!previousTechnicianId && previousTechnicianId !== dto.technicianId;
 
     await this.db.collection('serviceOrders').doc(orderId).update({
       assignedTechnicianId: dto.technicianId,
@@ -152,28 +177,63 @@ export class ServiceOrdersService {
       updatedAt: this.firebase.serverTimestamp(),
     });
 
+    const historyNote = isReassignment
+      ? `Técnico reasignado: ${previousTechnicianName} → ${dto.technicianName} por ${user.displayName ?? user.email}`
+      : `Técnico asignado: ${dto.technicianName} por ${user.displayName ?? user.email}`;
+
     await this.vehiclesService.changeStatus(order!['vehicleId'], VehicleStatus.ASIGNADO, user, {
-      extraFields: { assignedTechnicianId: dto.technicianId },
+      notes: historyNote,
+      extraFields: { assignedTechnicianId: dto.technicianId, assignedTechnicianName: dto.technicianName },
     });
 
-    await this.notificationsService.notify({
-      type: 'TECNICO_ASIGNADO',
-      targetRole: RoleEnum.PERSONAL_TALLER,
-      targetSede: order!['sede'],
-      title: '🔨 Nueva asignación de instalación',
-      body: `Se te asignó el vehículo ${vehicle['chassis']} para instalación`,
-      vehicleId: order!['vehicleId'],
-      chassis: vehicle['chassis'] as string,
-      data: { technicianId: dto.technicianId },
-    });
+    const notifBody = `Se te asignó el vehículo ${vehicle['chassis']} para instalación`;
+    const notifJobs: Promise<void>[] = [
+      this.notificationsService.notify({
+        type: 'TECNICO_ASIGNADO',
+        targetRole: RoleEnum.PERSONAL_TALLER,
+        targetSede: order!['sede'],
+        title: '🔨 Nueva asignación de instalación',
+        body: notifBody,
+        vehicleId: order!['vehicleId'],
+        chassis: vehicle['chassis'] as string,
+        data: { technicianId: dto.technicianId },
+      }),
+    ];
 
-    return { orderId, assignedTechnicianId: dto.technicianId };
+    if (isReassignment) {
+      // Notificar al técnico anterior que fue removido de la OT
+      notifJobs.push(
+        this.notificationsService.notify({
+          type: 'TECNICO_REMOVIDO',
+          targetRole: RoleEnum.PERSONAL_TALLER,
+          targetSede: order!['sede'],
+          title: '⚠️ Reasignación de OT',
+          body: `El vehículo ${vehicle['chassis']} fue reasignado a otro técnico`,
+          vehicleId: order!['vehicleId'],
+          chassis: vehicle['chassis'] as string,
+          data: { technicianId: previousTechnicianId },
+        }),
+      );
+    }
+
+    await Promise.all(notifJobs);
+
+    this.logger.log(`${isReassignment ? 'Reasignación' : 'Asignación'} de técnico en OT ${orderId}: ${dto.technicianId}`);
+    return { orderId, assignedTechnicianId: dto.technicianId, isReassignment };
   }
 
   async updateChecklist(orderId: string, dto: UpdateChecklistDto, user: AuthenticatedUser) {
     const order = await this.findOne(orderId);
 
-    if (order!['assignedTechnicianId'] !== user.uid && user.role !== RoleEnum.JEFE_TALLER) {
+    const allowedOrderStatuses = ['ASIGNADA', 'EN_INSTALACION'];
+    if (!allowedOrderStatuses.includes(order!['status'])) {
+      throw new BadRequestException(
+        `No se puede actualizar el checklist desde el estado '${order!['status']}'. Estado requerido: ASIGNADA o EN_INSTALACION`,
+      );
+    }
+
+    const isOverrideRole = user.role === RoleEnum.JEFE_TALLER || user.role === RoleEnum.SOPORTE;
+    if (order!['assignedTechnicianId'] !== user.uid && !isOverrideRole) {
       throw new ForbiddenException('Solo el técnico asignado puede marcar la instalación');
     }
 
@@ -200,21 +260,35 @@ export class ServiceOrdersService {
       : VehicleStatus.EN_INSTALACION;
 
     await this.vehiclesService.changeStatus(vehicleId, vehicleNewStatus, user, {
+      notes: allInstalled
+        ? `Instalación completada por ${user.displayName ?? user.email}`
+        : `Accesorio '${dto.accessoryKey}' marcado como instalado por ${user.displayName ?? user.email}`,
       extraFields: allInstalled
         ? { installationCompleteDate: this.firebase.serverTimestamp(), installedBy: user.uid }
         : {},
     });
 
     if (allInstalled) {
-      await this.notificationsService.notify({
-        type: 'INSTALACION_LISTA',
-        targetRole: RoleEnum.LIDER_TECNICO,
-        targetSede: order!['sede'],
-        title: '✅ Instalación completada',
-        body: `El vehículo ${vehicle['chassis']} completó la instalación de accesorios`,
-        vehicleId,
-        chassis: vehicle['chassis'] as string,
-      });
+      await Promise.all([
+        this.notificationsService.notify({
+          type: 'INSTALACION_LISTA',
+          targetRole: RoleEnum.LIDER_TECNICO,
+          targetSede: order!['sede'],
+          title: '✅ Instalación completada',
+          body: `El vehículo ${vehicle['chassis']} completó la instalación de accesorios`,
+          vehicleId,
+          chassis: vehicle['chassis'] as string,
+        }),
+        this.notificationsService.notify({
+          type: 'INSTALACION_LISTA',
+          targetRole: RoleEnum.JEFE_TALLER,
+          targetSede: 'ALL',
+          title: '✅ Instalación completada',
+          body: `El vehículo ${vehicle['chassis']} completó la instalación de accesorios`,
+          vehicleId,
+          chassis: vehicle['chassis'] as string,
+        }),
+      ]);
     }
 
     return { orderId, vehicleId, allInstalled, newOrderStatus, vehicleNewStatus };
@@ -237,17 +311,30 @@ export class ServiceOrdersService {
       updatedAt: this.firebase.serverTimestamp(),
     });
 
-    await this.vehiclesService.changeStatus(order!['vehicleId'], VehicleStatus.LISTO_PARA_ENTREGA, user);
-
-    await this.notificationsService.notify({
-      type: 'LISTO_ENTREGA',
-      targetRole: RoleEnum.ASESOR,
-      targetSede: order!['sede'],
-      title: '🚗 Vehículo listo para entrega',
-      body: `El vehículo ${vehicle['chassis']} está listo para agendar entrega`,
-      vehicleId: order!['vehicleId'],
-      chassis: vehicle['chassis'] as string,
+    await this.vehiclesService.changeStatus(order!['vehicleId'], VehicleStatus.LISTO_PARA_ENTREGA, user, {
+      notes: `Instalación aprobada y marcada lista para entrega por ${user.displayName ?? user.email}`,
     });
+
+    await Promise.all([
+      this.notificationsService.notify({
+        type: 'LISTO_ENTREGA',
+        targetRole: RoleEnum.ASESOR,
+        targetSede: order!['sede'],
+        title: '🚗 Vehículo listo para entrega',
+        body: `El vehículo ${vehicle['chassis']} está listo para agendar entrega`,
+        vehicleId: order!['vehicleId'],
+        chassis: vehicle['chassis'] as string,
+      }),
+      this.notificationsService.notify({
+        type: 'LISTO_ENTREGA',
+        targetRole: RoleEnum.JEFE_TALLER,
+        targetSede: 'ALL',
+        title: '🚗 Vehículo listo para entrega',
+        body: `El vehículo ${vehicle['chassis']} está listo para agendar entrega`,
+        vehicleId: order!['vehicleId'],
+        chassis: vehicle['chassis'] as string,
+      }),
+    ]);
 
     return { orderId, vehicleId: order!['vehicleId'], newStatus: VehicleStatus.LISTO_PARA_ENTREGA };
   }
@@ -294,6 +381,7 @@ export class ServiceOrdersService {
       previousOrderId,
       reason: dto.reason,
       createdBy: user.uid,
+      createdByName: user.displayName ?? user.email,
       createdAt: now,
       updatedAt: now,
     };

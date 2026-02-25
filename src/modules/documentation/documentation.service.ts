@@ -173,12 +173,26 @@ export class DocumentationService {
 
     const vehicle = await this.vehiclesService.assertExists(vehicleId);
 
+    // saveAsPending es un flag de control — no se persiste directamente en el doc
+    const { saveAsPending, ...restDto } = dto;
+    const isCompleting =
+      saveAsPending === false &&
+      vehicle['status'] === VehicleStatus.DOCUMENTACION_PENDIENTE;
+
+    const now = this.firebase.serverTimestamp();
     const updates: Record<string, unknown> = {
-      ...dto,
-      updatedAt: this.firebase.serverTimestamp(),
+      ...restDto,
+      updatedAt: now,
     };
 
-    // Reemplazar PDFs específicos que se reciban — sólo el archivo enviado
+    // Si se está completando la documentación pendiente, marcar como COMPLETO
+    if (isCompleting) {
+      updates['documentationStatus'] = 'COMPLETO';
+      updates['documentedAt'] = now;
+      updates['documentedBy'] = user.uid;
+    }
+
+    // Reemplazar PDFs específicos que se reciban — solo el archivo enviado
     const basePath = `vehicles/${vehicleId}/docs`;
     const uploadAndSign = async (file: Express.Multer.File, path: string) => {
       await this.firebase.deleteFile(path);
@@ -205,11 +219,53 @@ export class DocumentationService {
 
     await this.db.collection('documentations').doc(vehicleId).update(updates);
 
+    if (isCompleting) {
+      // Transición real de estado: DOCUMENTACION_PENDIENTE → DOCUMENTADO
+      // changeStatus escribe internamente el statusHistory con el cambio de estado
+      await this.vehiclesService.changeStatus(
+        vehicleId,
+        VehicleStatus.DOCUMENTADO,
+        user,
+        {
+          notes: `Documentación completada por ${user.displayName ?? user.email}${updatedFiles.length ? '. Archivos: ' + updatedFiles.join(', ') : ''}`,
+          extraFields: {
+            documentationDate: now,
+            documentedBy: user.uid,
+          },
+        },
+      );
+
+      // Notificar a ASESOR y LIDER_TECNICO: vehículo listo para accesorizar
+      await Promise.all([
+        this.notificationsService.notify({
+          type: 'ESTADO_CAMBIADO',
+          targetRole: RoleEnum.ASESOR,
+          targetSede: vehicle['sede'],
+          title: '📄 Vehículo documentado y listo para accesorizar',
+          body: `El vehículo ${vehicle['chassis']} ha completado su documentación`,
+          vehicleId,
+          chassis: vehicle['chassis'] as string,
+        }),
+        this.notificationsService.notify({
+          type: 'ESTADO_CAMBIADO',
+          targetRole: RoleEnum.LIDER_TECNICO,
+          targetSede: vehicle['sede'],
+          title: '📄 Vehículo documentado y listo para accesorizar',
+          body: `El vehículo ${vehicle['chassis']} ha completado su documentación`,
+          vehicleId,
+          chassis: vehicle['chassis'] as string,
+        }),
+      ]);
+
+      this.logger.log(`Documentación COMPLETADA para vehículo ${vehicleId} por ${user.uid}`);
+      return { vehicleId, updated: true, newStatus: VehicleStatus.DOCUMENTADO };
+    }
+
+    // Actualización parcial sin cambio de estado — audit trail en statusHistory + notificación JEFE_TALLER
     const note = updatedFiles.length
       ? `Documentación actualizada por ${user.displayName ?? user.email}. Archivos reemplazados: ${updatedFiles.join(', ')}`
       : `Documentación actualizada por ${user.displayName ?? user.email}`;
 
-    // Registrar en historial y notificar a JEFE_TALLER
     await Promise.all([
       this.vehiclesService.addStatusHistory(
         vehicleId,
@@ -336,17 +392,50 @@ export class DocumentationService {
       extraFields: { sede: newSede },
     });
 
-    await this.notificationsService.notify({
-      type: 'CAMBIO_SEDE',
-      targetRole: RoleEnum.JEFE_TALLER,
-      targetSede: 'ALL',
-      title: '🔄 Cambio de sede',
-      body: `Vehículo ${vehicle['chassis']} movido de ${vehicle['sede']} a ${newSede}`,
-      vehicleId,
-      chassis: vehicle['chassis'] as string,
-    });
+    const notifBody = `Vehículo ${vehicle['chassis']} movido de ${vehicle['sede']} a ${newSede}`;
+    await Promise.all([
+      // JEFE_TALLER global (ambas sedes)
+      this.notificationsService.notify({
+        type: 'CAMBIO_SEDE',
+        targetRole: RoleEnum.JEFE_TALLER,
+        targetSede: 'ALL',
+        title: '🔄 Cambio de sede',
+        body: notifBody,
+        vehicleId,
+        chassis: vehicle['chassis'] as string,
+      }),
+      // Roles de la sede destino que deben saber que llega un vehículo
+      this.notificationsService.notify({
+        type: 'CAMBIO_SEDE',
+        targetRole: RoleEnum.DOCUMENTACION,
+        targetSede: newSede,
+        title: '🔄 Vehículo entrante por cambio de sede',
+        body: notifBody,
+        vehicleId,
+        chassis: vehicle['chassis'] as string,
+      }),
+      this.notificationsService.notify({
+        type: 'CAMBIO_SEDE',
+        targetRole: RoleEnum.ASESOR,
+        targetSede: newSede,
+        title: '🔄 Vehículo entrante por cambio de sede',
+        body: notifBody,
+        vehicleId,
+        chassis: vehicle['chassis'] as string,
+      }),
+      this.notificationsService.notify({
+        type: 'CAMBIO_SEDE',
+        targetRole: RoleEnum.LIDER_TECNICO,
+        targetSede: newSede,
+        title: '🔄 Vehículo entrante por cambio de sede',
+        body: notifBody,
+        vehicleId,
+        chassis: vehicle['chassis'] as string,
+      }),
+    ]);
 
-    return { vehicleId, newSede };
+    this.logger.log(`Sede cambiada para vehículo ${vehicleId}: ${vehicle['sede']} → ${newSede} por ${user.uid}`);
+    return { vehicleId, previousSede: vehicle['sede'], newSede };
   }
 
   async transferConcessionaire(

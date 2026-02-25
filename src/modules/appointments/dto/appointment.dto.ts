@@ -1,17 +1,56 @@
-import { IsString, IsNotEmpty, IsDateString } from 'class-validator';
+import { IsString, IsNotEmpty, IsDateString, IsOptional, Matches } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 
 export class CreateAppointmentDto {
-  @ApiProperty() @IsString() @IsNotEmpty() vehicleId: string;
-  @ApiProperty({ description: 'Fecha: YYYY-MM-DD' }) @IsDateString() scheduledDate: string;
-  @ApiProperty({ description: 'Hora: HH:MM', example: '10:00' }) @IsString() scheduledTime: string;
-  @ApiProperty({ description: 'UID del asesor asignado' }) @IsString() assignedAdvisorId: string;
-  @ApiProperty({ description: 'Nombre del asesor para visualización' }) @IsString() assignedAdvisorName: string;
+  @ApiProperty({ description: 'ID del vehículo (UUID)', example: 'abc-123' })
+  @IsString()
+  @IsNotEmpty()
+  vehicleId: string;
+
+  @ApiProperty({ description: 'Fecha de entrega en formato YYYY-MM-DD', example: '2026-03-15' })
+  @IsDateString()
+  scheduledDate: string;
+
+  @ApiProperty({ description: 'Hora de entrega en formato HH:MM', example: '10:00' })
+  @IsString()
+  @Matches(/^([01]\d|2[0-3]):[0-5]\d$/, { message: 'scheduledTime debe tener formato HH:MM' })
+  scheduledTime: string;
+
+  @ApiProperty({
+    description:
+      'UID del asesor encargado de la entrega. Por lo general es el uid del usuario autenticado ' +
+      '(obtenido del token). Para listar asesores disponibles: GET /users?role=ASESOR&sede={sede}&active=true',
+    example: 'uid-asesor-xyz',
+  })
+  @IsString()
+  @IsNotEmpty()
+  assignedAdvisorId: string;
+
+  @ApiProperty({ description: 'Nombre del asesor para visualización en historia', example: 'Juan Pérez' })
+  @IsString()
+  @IsNotEmpty()
+  assignedAdvisorName: string;
 }
 
 export class UpdateAppointmentDto {
-  @ApiPropertyOptional() scheduledDate?: string;
-  @ApiPropertyOptional() scheduledTime?: string;
-  @ApiPropertyOptional() assignedAdvisorId?: string;
-  @ApiPropertyOptional() assignedAdvisorName?: string;
+  @ApiPropertyOptional({ description: 'Nueva fecha de entrega (YYYY-MM-DD)', example: '2026-03-20' })
+  @IsOptional()
+  @IsDateString()
+  scheduledDate?: string;
+
+  @ApiPropertyOptional({ description: 'Nueva hora de entrega (HH:MM)', example: '14:30' })
+  @IsOptional()
+  @IsString()
+  @Matches(/^([01]\d|2[0-3]):[0-5]\d$/, { message: 'scheduledTime debe tener formato HH:MM' })
+  scheduledTime?: string;
+
+  @ApiPropertyOptional({ description: 'UID del nuevo asesor asignado', example: 'uid-asesor-abc' })
+  @IsOptional()
+  @IsString()
+  assignedAdvisorId?: string;
+
+  @ApiPropertyOptional({ description: 'Nombre del nuevo asesor para visualización', example: 'María López' })
+  @IsOptional()
+  @IsString()
+  assignedAdvisorName?: string;
 }

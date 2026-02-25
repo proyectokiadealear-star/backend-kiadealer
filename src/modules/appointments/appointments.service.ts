@@ -42,6 +42,7 @@ export class AppointmentsService {
       assignedAdvisorName: dto.assignedAdvisorName,
       status: 'AGENDADO',
       createdBy: user.uid,
+      createdByName: user.displayName ?? user.email,
       createdAt: now,
       updatedAt: now,
     };
@@ -49,6 +50,7 @@ export class AppointmentsService {
     await this.db.collection('appointments').doc(aptId).set(aptData);
 
     await this.vehiclesService.changeStatus(dto.vehicleId, VehicleStatus.AGENDADO, user, {
+      notes: `Entrega agendada por ${user.displayName ?? user.email} para el ${dto.scheduledDate} a las ${dto.scheduledTime}. Asesor: ${dto.assignedAdvisorName}`,
       extraFields: { appointmentId: aptId },
     });
 
@@ -97,10 +99,28 @@ export class AppointmentsService {
     const doc = await this.db.collection('appointments').doc(aptId).get();
     if (!doc.exists) throw new NotFoundException('Agendamiento no encontrado');
 
+    const apt = doc.data()!;
+
     await this.db.collection('appointments').doc(aptId).update({
       ...dto,
       updatedAt: this.firebase.serverTimestamp(),
     });
+
+    // Audit trail en statusHistory del vehículo
+    const changes: string[] = [];
+    if (dto.scheduledDate && dto.scheduledDate !== apt['scheduledDate'])
+      changes.push(`fecha: ${apt['scheduledDate']} → ${dto.scheduledDate}`);
+    if (dto.scheduledTime && dto.scheduledTime !== apt['scheduledTime'])
+      changes.push(`hora: ${apt['scheduledTime']} → ${dto.scheduledTime}`);
+    if (dto.assignedAdvisorName && dto.assignedAdvisorName !== apt['assignedAdvisorName'])
+      changes.push(`asesor: ${apt['assignedAdvisorName']} → ${dto.assignedAdvisorName}`);
+
+    if (changes.length && apt['vehicleId']) {
+      await this.vehiclesService.assertExists(apt['vehicleId']);
+      await this.vehiclesService.addStatusHistory(apt['vehicleId'], VehicleStatus.AGENDADO, user, {
+        notes: `Reagendamiento por ${user.displayName ?? user.email}: ${changes.join(', ')}`,
+      });
+    }
 
     return { aptId, updated: true };
   }

@@ -1,6 +1,14 @@
 ﻿import { Controller, Post, Get, Param, Body, UseGuards, UploadedFiles, UseInterceptors } from '@nestjs/common';
 import { FileFieldsInterceptor } from '@nestjs/platform-express';
-import { ApiBearerAuth, ApiConsumes, ApiOperation, ApiTags } from '@nestjs/swagger';
+import {
+  ApiBearerAuth,
+  ApiBody,
+  ApiConsumes,
+  ApiOperation,
+  ApiParam,
+  ApiResponse,
+  ApiTags,
+} from '@nestjs/swagger';
 import { DeliveryService } from './delivery.service';
 import { CreateCeremonyDto } from './dto/delivery.dto';
 import { FirebaseAuthGuard } from '../../common/guards/firebase-auth.guard';
@@ -17,10 +25,38 @@ import type { AuthenticatedUser } from '../../common/interfaces/authenticated-us
 export class DeliveryController {
   constructor(private readonly svc: DeliveryService) {}
 
+  // ── EJECUTAR CEREMONIA DE ENTREGA ────────────────────
   @Post('ceremony/:vehicleId')
-  @ApiOperation({ summary: 'Ejecutar ceremonia de entrega' })
-  @ApiConsumes('multipart/form-data', 'application/json')
-  @Roles(RoleEnum.ASESOR, RoleEnum.JEFE_TALLER)
+  @ApiOperation({
+    summary: 'Ejecutar ceremonia de entrega',
+    description:
+      'Prerrequisitos: vehículo en estado `AGENDADO` **y** la fecha actual debe coincidir con el `scheduledDate` del agendamiento. ' +
+      'Solo el asesor asignado al agendamiento puede ejecutar la ceremonia (JEFE_TALLER y SOPORTE pueden hacerlo como override). ' +
+      'Carga foto con el vehículo y foto del acta firmada a Firebase Storage, ' +
+      'cambia estado a `ENTREGADO`, registra en statusHistory y notifica `ESTADO_CAMBIADO` al JEFE_TALLER. ' +
+      '**Fotos opcionales** — se puede confirmar sin archivos adjuntos. ' +
+      '**Roles:** ASESOR, JEFE_TALLER, SOPORTE',
+  })
+  @ApiParam({ name: 'vehicleId', description: 'ID del vehículo (UUID)' })
+  @ApiConsumes('multipart/form-data')
+  @ApiBody({
+    description: 'Datos de la ceremonia. Fotos opcionales.',
+    schema: {
+      type: 'object',
+      required: ['appointmentId'],
+      properties: {
+        appointmentId: { type: 'string', example: 'apt-uuid-123' },
+        clientComment: { type: 'string', example: 'Cliente muy satisfecho' },
+        deliveryPhoto: { type: 'string', format: 'binary', description: 'Foto del asesor con el vehículo' },
+        signedActa: { type: 'string', format: 'binary', description: 'Foto del acta firmada por el cliente' },
+      },
+    },
+  })
+  @ApiResponse({ status: 201, description: 'Entrega completada. Retorna vehicleId, newStatus: ENTREGADO, deliveryDate' })
+  @ApiResponse({ status: 400, description: 'Vehículo no está AGENDADO o no es el día de entrega' })
+  @ApiResponse({ status: 403, description: 'No eres el asesor asignado al agendamiento' })
+  @ApiResponse({ status: 404, description: 'Vehículo o agendamiento no encontrado' })
+  @Roles(RoleEnum.ASESOR, RoleEnum.JEFE_TALLER, RoleEnum.SOPORTE)
   @UseInterceptors(
     FileFieldsInterceptor([
       { name: 'deliveryPhoto', maxCount: 1 },
@@ -39,9 +75,18 @@ export class DeliveryController {
     });
   }
 
+  // ── OBTENER CEREMONIA ─────────────────────────────
   @Get('ceremony/:vehicleId')
-  @ApiOperation({ summary: 'Obtener ceremonia de entrega' })
-  @Roles(RoleEnum.JEFE_TALLER, RoleEnum.ASESOR)
+  @ApiOperation({
+    summary: 'Obtener datos de la ceremonia de entrega',
+    description:
+      'Retorna los datos de la ceremonia con URLs frescas de Firebase Storage para las fotos. ' +
+      '**Roles:** ASESOR, JEFE_TALLER, SOPORTE',
+  })
+  @ApiParam({ name: 'vehicleId', description: 'ID del vehículo (UUID)' })
+  @ApiResponse({ status: 200, description: 'Datos de la ceremonia con deliveryPhotoUrl y signedActaUrl' })
+  @ApiResponse({ status: 404, description: 'Ceremonia de entrega no encontrada' })
+  @Roles(RoleEnum.ASESOR, RoleEnum.JEFE_TALLER, RoleEnum.SOPORTE)
   getCeremony(@Param('vehicleId') vehicleId: string) {
     return this.svc.getCeremony(vehicleId);
   }

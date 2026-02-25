@@ -10,7 +10,12 @@ export class QueryVehiclesDto {
   @IsEnum(SedeEnum)
   sede?: SedeEnum;
 
-  @ApiPropertyOptional({ description: 'Filtrar por estado(s), separados por coma' })
+  @ApiPropertyOptional({
+    description:
+      'Filtrar por estado(s), separados por coma. ' +
+      'Por defecto se excluyen CEDIDO y ENTREGADO (estados terminales). ' +
+      'Pasar explícitamente ?status=CEDIDO o ?status=ENTREGADO para consultar el historial.',
+  })
   @IsOptional()
   @IsString()
   status?: string;

@@ -46,8 +46,16 @@ export class DeliveryService {
     if (!aptSnap.exists) throw new NotFoundException('Agendamiento no encontrado');
 
     const apt = aptSnap.data()!;
-    if (apt['assignedAdvisorId'] !== user.uid && user.role !== RoleEnum.JEFE_TALLER) {
+    if (apt['assignedAdvisorId'] !== user.uid && user.role !== RoleEnum.JEFE_TALLER && user.role !== RoleEnum.SOPORTE) {
       throw new ForbiddenException('Solo el asesor asignado puede ejecutar la ceremonia de entrega');
+    }
+
+    // Validar que la entrega ocurre el día agendado
+    const todayStr = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
+    if (apt['scheduledDate'] && apt['scheduledDate'] !== todayStr) {
+      throw new BadRequestException(
+        `La ceremonia solo puede ejecutarse el día agendado (${apt['scheduledDate']}). Hoy es ${todayStr}.`,
+      );
     }
 
     const basePath = `vehicles/${vehicleId}/delivery`;
@@ -78,9 +86,11 @@ export class DeliveryService {
     await this.db.collection('deliveryCeremonies').doc(vehicleId).set(ceremonyData);
 
     await this.vehiclesService.changeStatus(vehicleId, VehicleStatus.ENTREGADO, user, {
+      notes: `Entregado por ${user.displayName ?? user.email} — agendamiento ${dto.appointmentId}`,
       extraFields: {
         deliveryDate: now,
         deliveredBy: user.uid,
+        deliveredByName: user.displayName ?? user.email,
       },
     });
 

@@ -129,10 +129,17 @@ export class VehiclesService {
       ref = ref.where('sede', '==', user.sede);
     }
 
-    // Filtrar por chasis (Firestore no tiene LIKE, filtramos post-query)
+    // Filtrar por estado:
+    // - Si se pasa ?status → usar exactamente los estados solicitados (ej: ?status=CEDIDO para historial)
+    // - Sin ?status → excluir CEDIDO y ENTREGADO por defecto (son estados terminales, fuera del inventario activo)
     if (query.status) {
       const statuses = query.status.split(',').map((s) => s.trim());
       ref = ref.where('status', 'in', statuses);
+    } else {
+      const activeStatuses = Object.values(VehicleStatus).filter(
+        (s) => s !== VehicleStatus.CEDIDO && s !== VehicleStatus.ENTREGADO,
+      );
+      ref = ref.where('status', 'in', activeStatuses);
     }
 
     const snapshot = await ref.orderBy('createdAt', 'desc').get();
