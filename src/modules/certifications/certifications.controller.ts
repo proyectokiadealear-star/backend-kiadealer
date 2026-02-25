@@ -79,19 +79,23 @@ export class CertificationsController {
   @Patch(':vehicleId')
   @ApiOperation({
     summary: 'Editar certificación',
-    description: 'Permite corregir cualquier campo de la certificación. No re-dispara notificaciones. **Roles:** JEFE_TALLER, SOPORTE',
+    description:
+      'Permite corregir cualquier campo de la certificación, incluyendo la foto de aros. Si se envía una nueva foto, la anterior es eliminada de Storage. No re-dispara notificaciones. **Roles:** JEFE_TALLER, SOPORTE',
   })
   @ApiParam({ name: 'vehicleId', description: 'ID del vehículo (UUID)' })
+  @ApiConsumes('multipart/form-data', 'application/json')
   @ApiBody({ type: CreateCertificationDto })
   @ApiResponse({ status: 200, description: 'Certificación actualizada' })
   @ApiResponse({ status: 403, description: 'Rol no autorizado' })
   @ApiResponse({ status: 404, description: 'Certificación no encontrada' })
   @Roles(RoleEnum.JEFE_TALLER, RoleEnum.SOPORTE)
+  @UseInterceptors(FileInterceptor('rimsPhoto'))
   update(
     @Param('vehicleId') vehicleId: string,
     @Body() dto: Partial<CreateCertificationDto>,
+    @UploadedFile() rimsPhoto?: Express.Multer.File,
   ) {
-    return this.svc.update(vehicleId, dto);
+    return this.svc.update(vehicleId, dto, rimsPhoto);
   }
 
   // ── DELETE ──────────────────────────────────────────────────────

@@ -208,24 +208,43 @@ export class VehiclesService {
   }
 
   // ──────────────────────────────────────────────────────────────────
-  // UPDATE (solo JEFE_TALLER)
+  // UPDATE (JEFE_TALLER / SOPORTE)
   // ──────────────────────────────────────────────────────────────────
-  async update(id: string, dto: UpdateVehicleDto) {
+  async update(id: string, dto: UpdateVehicleDto, photoFile?: Express.Multer.File) {
     await this.assertExists(id);
+
     const updates: Record<string, unknown> = {
       ...dto,
       updatedAt: this.firebase.serverTimestamp(),
     };
     delete updates['photoBase64'];
+
+    // Reemplazar foto si se recibe nueva (multipart tiene prioridad sobre base64)
+    if (photoFile) {
+      const storagePath = `vehicles/${id}/photo.jpg`;
+      await this.firebase.deleteFile(storagePath);
+      await this.firebase.uploadBuffer(photoFile.buffer, storagePath, photoFile.mimetype);
+      updates['photoUrl'] = await this.firebase.getSignedUrl(storagePath);
+    } else if (dto.photoBase64) {
+      const base64Data = dto.photoBase64.replace(/^data:image\/\w+;base64,/, '');
+      const buffer = Buffer.from(base64Data, 'base64');
+      const storagePath = `vehicles/${id}/photo.jpg`;
+      await this.firebase.deleteFile(storagePath);
+      await this.firebase.uploadBuffer(buffer, storagePath, 'image/jpeg');
+      updates['photoUrl'] = await this.firebase.getSignedUrl(storagePath);
+    }
+
     await this.db.collection('vehicles').doc(id).update(updates);
     return { id, updated: true };
   }
 
   // ──────────────────────────────────────────────────────────────────
-  // DELETE (solo JEFE_TALLER)
+  // DELETE (JEFE_TALLER / SOPORTE)
   // ──────────────────────────────────────────────────────────────────
   async remove(id: string) {
     await this.assertExists(id);
+    // Eliminar foto de Firebase Storage antes de borrar el documento
+    await this.firebase.deleteFile(`vehicles/${id}/photo.jpg`);
     await this.db.collection('vehicles').doc(id).delete();
     return { id, deleted: true };
   }

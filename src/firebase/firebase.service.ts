@@ -78,6 +78,15 @@ export class FirebaseService implements OnModuleInit {
     return storagePath;
   }
 
+  /** Elimina un archivo de Firebase Storage (silencioso si no existe) */
+  async deleteFile(storagePath: string): Promise<void> {
+    try {
+      await this.bucket.file(storagePath).delete();
+    } catch {
+      // Ignorar si el archivo ya no existe
+    }
+  }
+
   serverTimestamp(): admin.firestore.FieldValue {
     return admin.firestore.FieldValue.serverTimestamp();
   }

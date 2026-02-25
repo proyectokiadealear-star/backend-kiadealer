@@ -179,19 +179,38 @@ export class CertificationsService {
     return data;
   }
 
-  async update(vehicleId: string, dto: Partial<CreateCertificationDto>) {
+  async update(
+    vehicleId: string,
+    dto: Partial<CreateCertificationDto>,
+    rimsPhotoFile?: Express.Multer.File,
+  ) {
     const doc = await this.db.collection('certifications').doc(vehicleId).get();
     if (!doc.exists) throw new NotFoundException('Certificación no encontrada');
-    await this.db.collection('certifications').doc(vehicleId).update({
+
+    const updates: Record<string, unknown> = {
       ...dto,
       updatedAt: this.firebase.serverTimestamp(),
-    });
+    };
+
+    // Reemplazar foto de aros si se recibe nueva
+    if (rimsPhotoFile) {
+      const storagePath = `vehicles/${vehicleId}/rims-photo.jpg`;
+      await this.firebase.deleteFile(storagePath);
+      await this.firebase.uploadBuffer(rimsPhotoFile.buffer, storagePath, rimsPhotoFile.mimetype);
+      const newUrl = await this.firebase.getSignedUrl(storagePath);
+      updates['rims'] = { ...(doc.data()?.['rims'] ?? {}), photoUrl: newUrl };
+    }
+
+    await this.db.collection('certifications').doc(vehicleId).update(updates);
     return { vehicleId, updated: true };
   }
 
   async remove(vehicleId: string, user: AuthenticatedUser) {
     const doc = await this.db.collection('certifications').doc(vehicleId).get();
     if (!doc.exists) throw new NotFoundException('Certificación no encontrada');
+
+    // Eliminar foto de aros de Firebase Storage
+    await this.firebase.deleteFile(`vehicles/${vehicleId}/rims-photo.jpg`);
 
     // Eliminar el documento de certificación
     await this.db.collection('certifications').doc(vehicleId).delete();

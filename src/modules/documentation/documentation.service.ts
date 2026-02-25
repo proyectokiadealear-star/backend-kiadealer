@@ -119,6 +119,17 @@ export class DocumentationService {
           chassis: vehicle['chassis'] as string,
         }),
       ]);
+    } else {
+      // Notificar a JEFE_TALLER que hay una documentación pendiente
+      await this.notificationsService.notify({
+        type: 'DOCUMENTACION_PENDIENTE',
+        targetRole: RoleEnum.JEFE_TALLER,
+        targetSede: vehicle['sede'],
+        title: '⚠️ Documentación incompleta',
+        body: `El vehículo ${vehicle['chassis']} tiene documentación pendiente de completar`,
+        vehicleId,
+        chassis: vehicle['chassis'] as string,
+      });
     }
 
     this.logger.log(`Documentación ${isPending ? 'pendiente' : 'completada'} para vehículo ${vehicleId}`);
@@ -147,15 +158,173 @@ export class DocumentationService {
     return data;
   }
 
-  async update(vehicleId: string, dto: Partial<CreateDocumentationDto>) {
-    const doc = await this.db.collection('documentations').doc(vehicleId).get();
-    if (!doc.exists) throw new NotFoundException('Documentación no encontrada');
+  async update(
+    vehicleId: string,
+    dto: Partial<CreateDocumentationDto>,
+    user: AuthenticatedUser,
+    files?: {
+      vehicleInvoice?: Express.Multer.File;
+      giftEmail?: Express.Multer.File;
+      accessoryInvoice?: Express.Multer.File;
+    },
+  ) {
+    const docSnap = await this.db.collection('documentations').doc(vehicleId).get();
+    if (!docSnap.exists) throw new NotFoundException('Documentación no encontrada');
 
-    await this.db.collection('documentations').doc(vehicleId).update({
+    const vehicle = await this.vehiclesService.assertExists(vehicleId);
+
+    const updates: Record<string, unknown> = {
       ...dto,
       updatedAt: this.firebase.serverTimestamp(),
-    });
+    };
+
+    // Reemplazar PDFs específicos que se reciban — sólo el archivo enviado
+    const basePath = `vehicles/${vehicleId}/docs`;
+    const uploadAndSign = async (file: Express.Multer.File, path: string) => {
+      await this.firebase.deleteFile(path);
+      await this.firebase.uploadBuffer(file.buffer, path, file.mimetype);
+      return this.firebase.getSignedUrl(path);
+    };
+
+    const updatedFiles: string[] = [];
+
+    await Promise.all([
+      files?.vehicleInvoice
+        ? uploadAndSign(files.vehicleInvoice, `${basePath}/vehicle-invoice.pdf`)
+            .then((url) => { updates['vehicleInvoiceUrl'] = url; updatedFiles.push('Factura vehículo'); })
+        : Promise.resolve(),
+      files?.giftEmail
+        ? uploadAndSign(files.giftEmail, `${basePath}/gift-email.pdf`)
+            .then((url) => { updates['giftEmailUrl'] = url; updatedFiles.push('Email regalo'); })
+        : Promise.resolve(),
+      files?.accessoryInvoice
+        ? uploadAndSign(files.accessoryInvoice, `${basePath}/accessory-invoice.pdf`)
+            .then((url) => { updates['accessoryInvoiceUrl'] = url; updatedFiles.push('Factura accesorios'); })
+        : Promise.resolve(),
+    ]);
+
+    await this.db.collection('documentations').doc(vehicleId).update(updates);
+
+    const note = updatedFiles.length
+      ? `Documentación actualizada por ${user.displayName ?? user.email}. Archivos reemplazados: ${updatedFiles.join(', ')}`
+      : `Documentación actualizada por ${user.displayName ?? user.email}`;
+
+    // Registrar en historial y notificar a JEFE_TALLER
+    await Promise.all([
+      this.vehiclesService.addStatusHistory(
+        vehicleId,
+        vehicle['status'] as any,
+        vehicle['status'] as any,
+        user,
+        vehicle['sede'] as any,
+        note,
+      ),
+      this.notificationsService.notify({
+        type: 'DOCUMENTACION_ACTUALIZADA',
+        targetRole: RoleEnum.JEFE_TALLER,
+        targetSede: vehicle['sede'],
+        title: '📄 Documentación actualizada',
+        body: `Documentación del vehículo ${vehicle['chassis']} fue modificada por ${user.displayName ?? user.email}`,
+        vehicleId,
+        chassis: vehicle['chassis'] as string,
+      }),
+    ]);
+
+    this.logger.log(`Documentación actualizada para vehículo ${vehicleId} por ${user.uid}`);
     return { vehicleId, updated: true };
+  }
+
+  async remove(vehicleId: string, user: AuthenticatedUser) {
+    const docSnap = await this.db.collection('documentations').doc(vehicleId).get();
+    if (!docSnap.exists) throw new NotFoundException('Documentación no encontrada');
+
+    const data = docSnap.data()!;
+    const vehicle = await this.vehiclesService.assertExists(vehicleId);
+
+    // Eliminar sólo los PDFs que tienen URL almacenada (evitar conflictos en Storage)
+    const basePath = `vehicles/${vehicleId}/docs`;
+    const deleteJobs: Promise<void>[] = [];
+    if (data['vehicleInvoiceUrl']) deleteJobs.push(this.firebase.deleteFile(`${basePath}/vehicle-invoice.pdf`));
+    if (data['giftEmailUrl'])      deleteJobs.push(this.firebase.deleteFile(`${basePath}/gift-email.pdf`));
+    if (data['accessoryInvoiceUrl']) deleteJobs.push(this.firebase.deleteFile(`${basePath}/accessory-invoice.pdf`));
+    await Promise.all(deleteJobs);
+
+    await this.db.collection('documentations').doc(vehicleId).delete();
+
+    // Registrar en historial y notificar a JEFE_TALLER
+    await Promise.all([
+      this.vehiclesService.addStatusHistory(
+        vehicleId,
+        vehicle['status'] as any,
+        vehicle['status'] as any,
+        user,
+        vehicle['sede'] as any,
+        `Documentación eliminada por ${user.displayName ?? user.email}`,
+      ),
+      this.notificationsService.notify({
+        type: 'DOCUMENTACION_ELIMINADA',
+        targetRole: RoleEnum.JEFE_TALLER,
+        targetSede: vehicle['sede'],
+        title: '🗑️ Documentación eliminada',
+        body: `La documentación del vehículo ${vehicle['chassis']} fue eliminada por ${user.displayName ?? user.email}`,
+        vehicleId,
+        chassis: vehicle['chassis'] as string,
+      }),
+    ]);
+
+    this.logger.log(`Documentación eliminada para vehículo ${vehicleId} por ${user.uid}`);
+    return { vehicleId, deleted: true };
+  }
+
+  /** Elimina un PDF específico de Storage y limpia su URL en Firestore */
+  async removeFile(
+    vehicleId: string,
+    fileType: 'vehicleInvoice' | 'giftEmail' | 'accessoryInvoice',
+    user: AuthenticatedUser,
+  ) {
+    const docSnap = await this.db.collection('documentations').doc(vehicleId).get();
+    if (!docSnap.exists) throw new NotFoundException('Documentación no encontrada');
+
+    const vehicle = await this.vehiclesService.assertExists(vehicleId);
+
+    const fileMap: Record<string, { storagePath: string; urlField: string; label: string }> = {
+      vehicleInvoice:  { storagePath: `vehicles/${vehicleId}/docs/vehicle-invoice.pdf`,  urlField: 'vehicleInvoiceUrl',  label: 'Factura vehículo' },
+      giftEmail:       { storagePath: `vehicles/${vehicleId}/docs/gift-email.pdf`,        urlField: 'giftEmailUrl',       label: 'Email regalo' },
+      accessoryInvoice:{ storagePath: `vehicles/${vehicleId}/docs/accessory-invoice.pdf`, urlField: 'accessoryInvoiceUrl',label: 'Factura accesorios' },
+    };
+
+    const target = fileMap[fileType];
+    if (!target) throw new BadRequestException(`Tipo de archivo inválido: ${fileType}`);
+
+    await this.firebase.deleteFile(target.storagePath);
+    await this.db.collection('documentations').doc(vehicleId).update({
+      [target.urlField]: null,
+      updatedAt: this.firebase.serverTimestamp(),
+    });
+
+    const note = `Archivo "${target.label}" eliminado por ${user.displayName ?? user.email}`;
+    await Promise.all([
+      this.vehiclesService.addStatusHistory(
+        vehicleId,
+        vehicle['status'] as any,
+        vehicle['status'] as any,
+        user,
+        vehicle['sede'] as any,
+        note,
+      ),
+      this.notificationsService.notify({
+        type: 'DOCUMENTACION_ACTUALIZADA',
+        targetRole: RoleEnum.JEFE_TALLER,
+        targetSede: vehicle['sede'],
+        title: '📄 Archivo de documentación eliminado',
+        body: `${note} — vehículo ${vehicle['chassis']}`,
+        vehicleId,
+        chassis: vehicle['chassis'] as string,
+      }),
+    ]);
+
+    this.logger.log(`Archivo ${fileType} eliminado para vehículo ${vehicleId} por ${user.uid}`);
+    return { vehicleId, fileType, deleted: true };
   }
 
   async changeSede(vehicleId: string, newSede: string, user: AuthenticatedUser) {

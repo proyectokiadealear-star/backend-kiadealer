@@ -133,16 +133,23 @@ export class VehiclesController {
   @Patch(':id')
   @ApiOperation({
     summary: 'Editar datos del vehículo',
-    description: 'Permite corregir cualquier campo del vehículo (incluyendo sede y status). Usar con precaución ya que omite las reglas de transición de estado. **Roles:** JEFE_TALLER, SOPORTE',
+    description:
+      'Permite corregir cualquier campo del vehículo (incluyendo sede, status y foto). Si se envía una nueva foto, la anterior es eliminada de Firebase Storage automáticamente. Usar con precaución ya que omite las reglas de transición de estado. **Roles:** JEFE_TALLER, SOPORTE',
   })
   @ApiParam({ name: 'id', description: 'ID único del vehículo (UUID)' })
+  @ApiConsumes('multipart/form-data', 'application/json')
   @ApiBody({ type: UpdateVehicleDto })
   @ApiResponse({ status: 200, description: 'Vehículo actualizado' })
   @ApiResponse({ status: 403, description: 'Rol no autorizado' })
   @ApiResponse({ status: 404, description: 'Vehículo no encontrado' })
   @Roles(RoleEnum.JEFE_TALLER, RoleEnum.SOPORTE)
-  update(@Param('id') id: string, @Body() dto: UpdateVehicleDto) {
-    return this.svc.update(id, dto);
+  @UseInterceptors(FileInterceptor('photo'))
+  update(
+    @Param('id') id: string,
+    @Body() dto: UpdateVehicleDto,
+    @UploadedFile() photo?: Express.Multer.File,
+  ) {
+    return this.svc.update(id, dto, photo);
   }
 
   // ── DELETE ──────────────────────────────────────────────────────
