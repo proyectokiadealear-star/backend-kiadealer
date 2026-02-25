@@ -161,17 +161,11 @@ export class DocumentationService {
   async changeSede(vehicleId: string, newSede: string, user: AuthenticatedUser) {
     const vehicle = await this.vehiclesService.assertExists(vehicleId);
 
-    await this.vehiclesService.changeStatus(vehicle['status'] as VehicleStatus, vehicle['status'] as VehicleStatus, user, {
+    // Cambio de sede: NO modifica el status, solo actualiza la sede y registra en historial
+    await this.vehiclesService.changeStatus(vehicleId, vehicle['status'] as VehicleStatus, user, {
       notes: `Cambio de sede: ${vehicle['sede']} → ${newSede}`,
       extraFields: { sede: newSede },
     });
-
-    // Actualizar sede directamente en el documento vehicles
-    await this.firebase
-      .firestore()
-      .collection('vehicles')
-      .doc(vehicleId)
-      .update({ sede: newSede, updatedAt: this.firebase.serverTimestamp() });
 
     await this.notificationsService.notify({
       type: 'CAMBIO_SEDE',

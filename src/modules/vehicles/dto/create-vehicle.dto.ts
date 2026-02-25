@@ -2,44 +2,57 @@ import {
   IsString,
   IsNotEmpty,
   IsNumber,
-  IsEnum,
   IsOptional,
-  Min,
 } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { SedeEnum } from '../../../common/enums/sede.enum';
 
 export class CreateVehicleDto {
-  @ApiProperty({ description: 'Número de chasis (único)', example: '9BFPK62M0PB001234' })
+  @ApiProperty({
+    description: 'Número de chasis único del vehículo (escaneado vía QR en la app móvil)',
+    example: '9BFPK62M0PB001234',
+  })
   @IsString()
   @IsNotEmpty()
   chassis: string;
 
-  @ApiProperty({ description: 'Modelo del vehículo', example: 'Sportage' })
+  @ApiProperty({
+    description: 'Modelo del vehículo (selector desde catálogo)',
+    example: 'Sportage',
+  })
   @IsString()
   @IsNotEmpty()
   model: string;
 
-  @ApiProperty({ description: 'Año del vehículo (>= año actual)', example: 2026 })
+  @ApiProperty({
+    description: 'Año del vehículo. El servidor valida dinámicamente que sea >= año actual.',
+    example: 2026,
+  })
   @IsNumber()
-  @Min(new Date().getFullYear())
   year: number;
 
-  @ApiProperty({ description: 'Color del vehículo', example: 'Blanco' })
+  @ApiProperty({
+    description: 'Color del vehículo (selector desde catálogo)',
+    example: 'Blanco Perla',
+  })
   @IsString()
   @IsNotEmpty()
   color: string;
 
-  @ApiProperty({ description: 'Concesionario de origen', example: 'LogiManta' })
+  @ApiProperty({
+    description: 'Concesionario de origen del vehículo (selector desde catálogo)',
+    example: 'LogiManta',
+  })
   @IsString()
   @IsNotEmpty()
   originConcessionaire: string;
 
-  @ApiProperty({ description: 'Sede donde ingresa el vehículo' })
-  @IsEnum(SedeEnum)
-  sede: SedeEnum;
+  // sede NO se recibe del cliente — se asigna automáticamente desde el claim del usuario (user.sede)
 
-  @ApiPropertyOptional({ description: 'Foto en base64 (si se envía como JSON)' })
+  @ApiPropertyOptional({
+    description:
+      'Foto del vehículo en base64 (alternativa a multipart). Si se envía como multipart/form-data, usar el field «photo».',
+    example: 'data:image/jpeg;base64,/9j/4AAQSkZJRg...',
+  })
   @IsOptional()
   @IsString()
   photoBase64?: string;

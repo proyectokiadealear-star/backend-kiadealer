@@ -44,13 +44,16 @@ export class VehiclesService {
       throw new BadRequestException(`El chasis '${dto.chassis}' ya existe en el sistema`);
     }
 
-    // 2. Validar año
+    // 2. Validar año dinámicamente (resiliente: siempre usa el año actual al momento del request)
     const currentYear = new Date().getFullYear();
     if (dto.year < currentYear) {
       throw new BadRequestException(
         `El año del vehículo debe ser >= ${currentYear}`,
       );
     }
+
+    // 3. Sede se asigna automáticamente desde el claim del usuario (no viene del DTO)
+    const sede = user.sede;
 
     const vehicleId = uuidv4();
     let photoUrl: string | null = null;
@@ -79,7 +82,7 @@ export class VehiclesService {
       color: dto.color,
       originConcessionaire: dto.originConcessionaire,
       photoUrl,
-      sede: dto.sede,
+      sede,
       status: VehicleStatus.RECEPCIONADO,
       receptionDate: now,
       certificationDate: null,
@@ -98,7 +101,7 @@ export class VehiclesService {
     await this.db.collection('vehicles').doc(vehicleId).set(vehicleData);
 
     // 5. Registrar en statusHistory
-    await this.addStatusHistory(vehicleId, null, VehicleStatus.RECEPCIONADO, user, dto.sede);
+    await this.addStatusHistory(vehicleId, null, VehicleStatus.RECEPCIONADO, user, sede);
 
     this.logger.log(`Vehículo creado: ${vehicleId} (${dto.chassis}) por ${user.uid}`);
 

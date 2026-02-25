@@ -85,27 +85,58 @@ export class CertificationsService {
 
     // Notificaciones según condiciones
     if (dto.mileage > 10) {
-      await this.notificationsService.notify({
-        type: 'KILOMETRAJE_ALTO',
-        targetRole: RoleEnum.JEFE_TALLER,
-        targetSede: vehicle['sede'],
-        title: '⚠️ Kilometraje alto detectado',
-        body: `Vehículo ${vehicle['chassis']} tiene ${dto.mileage} km`,
-        vehicleId,
-        chassis: vehicle['chassis'] as string,
-      });
+      await Promise.all([
+        this.notificationsService.notify({
+          type: 'KILOMETRAJE_ALTO',
+          targetRole: RoleEnum.JEFE_TALLER,
+          targetSede: vehicle['sede'],
+          title: '⚠️ Kilometraje alto detectado',
+          body: `Vehículo ${vehicle['chassis']} tiene ${dto.mileage} km`,
+          vehicleId,
+          chassis: vehicle['chassis'] as string,
+        }),
+        this.notificationsService.notify({
+          type: 'KILOMETRAJE_ALTO',
+          targetRole: RoleEnum.LIDER_TECNICO,
+          targetSede: vehicle['sede'],
+          title: '⚠️ Kilometraje alto detectado',
+          body: `Vehículo ${vehicle['chassis']} tiene ${dto.mileage} km`,
+          vehicleId,
+          chassis: vehicle['chassis'] as string,
+        }),
+      ]);
     }
 
     if (dto.imprints === ImprintsStatus.SIN_IMPRONTAS) {
-      await this.notificationsService.notify({
-        type: 'SIN_IMPRONTAS',
-        targetRole: RoleEnum.JEFE_TALLER,
-        targetSede: vehicle['sede'],
-        title: '⚠️ Vehículo sin improntas',
-        body: `El vehículo ${vehicle['chassis']} fue certificado sin improntas`,
-        vehicleId,
-        chassis: vehicle['chassis'] as string,
-      });
+      await Promise.all([
+        this.notificationsService.notify({
+          type: 'SIN_IMPRONTAS',
+          targetRole: RoleEnum.JEFE_TALLER,
+          targetSede: vehicle['sede'],
+          title: '⚠️ Vehículo sin improntas',
+          body: `El vehículo ${vehicle['chassis']} fue certificado sin improntas`,
+          vehicleId,
+          chassis: vehicle['chassis'] as string,
+        }),
+        this.notificationsService.notify({
+          type: 'SIN_IMPRONTAS',
+          targetRole: RoleEnum.LIDER_TECNICO,
+          targetSede: vehicle['sede'],
+          title: '⚠️ Vehículo sin improntas',
+          body: `El vehículo ${vehicle['chassis']} fue certificado sin improntas`,
+          vehicleId,
+          chassis: vehicle['chassis'] as string,
+        }),
+        this.notificationsService.notify({
+          type: 'SIN_IMPRONTAS',
+          targetRole: RoleEnum.DOCUMENTACION,
+          targetSede: vehicle['sede'],
+          title: '⚠️ Vehículo sin improntas',
+          body: `El vehículo ${vehicle['chassis']} fue certificado sin improntas`,
+          vehicleId,
+          chassis: vehicle['chassis'] as string,
+        }),
+      ]);
     }
 
     // Notificar a DOCUMENTACION que hay un vehículo listo para documentar
@@ -156,5 +187,27 @@ export class CertificationsService {
       updatedAt: this.firebase.serverTimestamp(),
     });
     return { vehicleId, updated: true };
+  }
+
+  async remove(vehicleId: string, user: AuthenticatedUser) {
+    const doc = await this.db.collection('certifications').doc(vehicleId).get();
+    if (!doc.exists) throw new NotFoundException('Certificación no encontrada');
+
+    // Eliminar el documento de certificación
+    await this.db.collection('certifications').doc(vehicleId).delete();
+
+    // Revertir el vehículo a RECEPCIONADO para que pueda ser re-certificado
+    await this.vehiclesService.changeStatus(
+      vehicleId,
+      VehicleStatus.RECEPCIONADO,
+      user,
+      {
+        notes: 'Certificación eliminada por JEFE_TALLER/SOPORTE — requiere re-certificación',
+        extraFields: { certificationDate: null, certifiedBy: null },
+      },
+    );
+
+    this.logger.log(`Certificación eliminada para vehículo ${vehicleId} por ${user.uid}`);
+    return { vehicleId, deleted: true };
   }
 }
