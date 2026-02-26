@@ -1,6 +1,7 @@
 import { Injectable, OnModuleInit, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import * as admin from 'firebase-admin';
+import { v4 as uuidv4 } from 'uuid';
 
 @Injectable()
 export class FirebaseService implements OnModuleInit {
@@ -57,24 +58,48 @@ export class FirebaseService implements OnModuleInit {
     return this.storage().bucket();
   }
 
-  /** Genera una URL firmada con expiración en segundos (default 1h) */
-  async getSignedUrl(storagePath: string, expiresInSeconds = 3600): Promise<string> {
+  /**
+   * Retorna la URL de descarga permanente del archivo usando el download token
+   * embebido en los metadatos.  NO requiere el rol IAM "Token Creator".
+   * Si por alguna razón el token no existe (archivo subido antes de esta versión),
+   * genera una URL firmada como fallback.
+   */
+  async getSignedUrl(storagePath: string): Promise<string> {
     const file = this.bucket.file(storagePath);
+    const [metadata] = await file.getMetadata();
+    const token = metadata.metadata?.firebaseStorageDownloadTokens as string | undefined;
+
+    if (token) {
+      const encoded = encodeURIComponent(storagePath);
+      return `https://firebasestorage.googleapis.com/v0/b/${this.bucket.name}/o/${encoded}?alt=media&token=${token}`;
+    }
+
+    // Fallback (requiere Token Creator IAM) — solo para archivos legacy
     const [url] = await file.getSignedUrl({
       action: 'read',
-      expires: Date.now() + expiresInSeconds * 1000,
+      expires: Date.now() + 365 * 24 * 60 * 60 * 1000, // 1 año
     });
     return url;
   }
 
-  /** Sube un buffer a Firebase Storage y retorna el path */
+  /**
+   * Sube un buffer a Firebase Storage.
+   * Embebe un firebaseStorageDownloadTokens en los metadatos para que
+   * getSignedUrl() pueda construir la URL sin permisos IAM adicionales.
+   */
   async uploadBuffer(
     buffer: Buffer,
     storagePath: string,
     contentType: string,
   ): Promise<string> {
     const file = this.bucket.file(storagePath);
-    await file.save(buffer, { metadata: { contentType } });
+    const downloadToken = uuidv4();
+    await file.save(buffer, {
+      metadata: {
+        contentType,
+        metadata: { firebaseStorageDownloadTokens: downloadToken },
+      },
+    });
     return storagePath;
   }
 
