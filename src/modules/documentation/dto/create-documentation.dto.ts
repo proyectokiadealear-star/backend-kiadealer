@@ -8,9 +8,8 @@ import {
   IsBoolean,
   Matches,
 } from 'class-validator';
-import { Transform } from 'class-transformer';
+import { Transform, Type, plainToInstance } from 'class-transformer';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { Type } from 'class-transformer';
 import { AccessoryKey, AccessoryClassification } from '../../../common/enums/accessory-key.enum';
 import { PaymentMethod } from '../../../common/enums/payment-method.enum';
 import { IsEcuadorianCedula } from '../../../common/validators/ecuador-cedula.validator';
@@ -94,15 +93,18 @@ export class CreateDocumentationDto {
       'Clasificación de los 14 accesorios (VENDIDO / OBSEQUIADO / NO_APLICA). El campo "otros" admite notes de texto libre. ' +
       'En multipart/form-data enviar como JSON serializado: `JSON.stringify([...])`.',
   })
+  @Transform(({ value }) => {
+    const parsed =
+      typeof value === 'string'
+        ? (() => { try { return JSON.parse(value); } catch { return value; } })()
+        : value;
+    return Array.isArray(parsed)
+      ? parsed.map((item: unknown) => plainToInstance(AccessoryItemDto, item))
+      : parsed;
+  })
   @IsArray()
   @ValidateNested({ each: true })
   @Type(() => AccessoryItemDto)
-  @Transform(({ value }) => {
-    if (typeof value === 'string') {
-      try { return JSON.parse(value); } catch { return value; }
-    }
-    return value;
-  })
   accessories: AccessoryItemDto[];
 
   @ApiPropertyOptional({
