@@ -1,353 +1,222 @@
-# KIA Dealer Management API — Referencia de Endpoints
+﻿# 📡 ENDPOINTS — KIA DEALER MANAGEMENT SYSTEM
 
-> Base URL: `http://localhost:3000`
-> Swagger UI: `http://localhost:3000/api`
-> Autenticación: **Bearer Token** (Firebase ID Token) en todos los endpoints salvo `/auth/login` y `/seed/run`.
-
----
-
-## Roles del sistema
-
-| Código | Descripción |
-|---|---|
-| `JEFE_TALLER` | Acceso total a todas las sedes y operaciones |
-| `LIDER_TECNICO` | Gestión de órdenes de trabajo y técnicos en su sede |
-| `ASESOR` | Recepción de vehículos, agendamiento y entregas en su sede |
-| `PERSONAL_TALLER` | Ejecución de instalaciones (checklist) |
-| `DOCUMENTACION` | Registro de documentación, cambio de sede y cesiones |
+**Base URL (producción):** `https://tu-app.onrender.com`  
+**Base URL (local):** `http://localhost:3000`  
+**Swagger UI:** `{BASE_URL}/api`  
+**Auth:** Bearer Token (Firebase ID Token) — header `Authorization: Bearer <token>`
 
 ---
 
-## Sedes (`SedeEnum`)
+## 🔑 AUTH
 
-`SURMOTOR` · `SHYRIS` · `GRANADAS_CENTENOS` · `ALL` (solo JEFE_TALLER)
+| Método | Ruta | Descripción | Roles |
+|--------|------|-------------|-------|
+| POST | `/auth/login` | Verifica token Firebase y devuelve claims del usuario (rol, sede, uid) | Público |
+
+```bash
+curl -X POST http://localhost:3000/auth/login \
+  -H "Authorization: Bearer <FIREBASE_ID_TOKEN>"
+```
 
 ---
 
-## 0. Auth `/auth`
+## 👤 USERS
 
-> ⚠️ Único endpoint **público** (no requiere Bearer Token). Úsalo para obtener el `idToken` que se envía como `Authorization: Bearer <idToken>` en todas las demás peticiones.
+| Método | Ruta | Descripción | Roles |
+|--------|------|-------------|-------|
+| POST | `/users` | Crear usuario (Firebase Auth + Firestore, asigna rol y sede) | JEFE_TALLER, SOPORTE |
+| POST | `/users/fcm-token` | Registrar token FCM del dispositivo | Todos |
+| GET | `/users` | Listar usuarios. Query: `?role=ASESOR&sede=X&active=true` | JEFE_TALLER, SOPORTE |
+| GET | `/users/:uid` | Detalle de usuario | JEFE_TALLER, SOPORTE |
+| PATCH | `/users/:uid` | Editar usuario (nombre, rol, sede, activo) | JEFE_TALLER, SOPORTE |
+| DELETE | `/users/:uid` | Eliminar de Firebase Auth + Firestore | JEFE_TALLER, SOPORTE |
+| POST | `/users/:uid/reset-password` | Enviar email de reseteo | JEFE_TALLER, SOPORTE |
 
-| Método | Ruta | Descripción | Autenticación |
-|---|---|---|---|
-| `POST` | `/auth/login` | Login con email y contraseña. Retorna `idToken`, `refreshToken` y perfil del usuario. | Sin Bearer |
+---
 
-### Body — `POST /auth/login`
+## 🚗 VEHICLES — Fase 1.1 Ingreso
 
+| Método | Ruta | Descripción | Roles |
+|--------|------|-------------|-------|
+| POST | `/vehicles` | **Ingresar vehículo** → `RECEPCIONADO`. Sede del token. Acepta `multipart/form-data` (campo `photo`) o JSON con `photoBase64` | ASESOR, LIDER_TECNICO, PERSONAL_TALLER, JEFE_TALLER, SOPORTE |
+| GET | `/vehicles` | Listar inventario activo. Query: `?chassis=9BFP&sede=X&status=AGENDADO&clientId=123&page=1&limit=20` | Todos |
+| GET | `/vehicles/:id` | Detalle con certificación y documentación embebidas | Todos |
+| GET | `/vehicles/:id/status-history` | **Historial completo de estados** ordenado cronológicamente | Todos |
+| PATCH | `/vehicles/:id` | Editar campos del vehículo (corrección admin) | JEFE_TALLER, SOPORTE |
+| DELETE | `/vehicles/:id` | Eliminar vehículo permanentemente | JEFE_TALLER, SOPORTE |
+| GET | `/vehicles/stats/by-sede` | KPIs: conteo por sede y estado | JEFE_TALLER, SOPORTE |
+| GET | `/vehicles/stats/today-deliveries` | Vehículos con `AGENDADO` para hoy | ASESOR, LIDER_TECNICO, JEFE_TALLER, SOPORTE |
+
+### Query params de GET /vehicles
+```
+?chassis=9BFP                          busqueda parcial del chasis
+?sede=SURMOTOR_NORTE                   filtrar por sede
+?status=AGENDADO                       un estado exacto
+?status=AGENDADO,LISTO_PARA_ENTREGA    multiples estados separados por coma
+?status=ENTREGADO                      ver historial de entregados (terminal)
+?clientId=1723456789                   filtrar por cedula de cliente
+?page=1&limit=20                       paginacion
+```
+Sin ?sede: roles normales ven solo su sede. JEFE_TALLER/SOPORTE ven todo.  
+Sin ?status: excluye CEDIDO y ENTREGADO (inventario activo).
+
+---
+
+## 🔍 CERTIFICATIONS — Fase 1.2
+
+| Método | Ruta | Descripción | Roles |
+|--------|------|-------------|-------|
+| POST | `/certifications/:vehicleId` | **Certificar** → `CERTIFICADO_STOCK`. Acepta foto de aros. Dispara alertas KILOMETRAJE_ALTO / SIN_IMPRONTAS | ASESOR, LIDER_TECNICO, PERSONAL_TALLER, JEFE_TALLER, SOPORTE |
+| GET | `/certifications/:vehicleId` | Obtener certificación | Todos |
+| PATCH | `/certifications/:vehicleId` | Editar certificación existente | ASESOR, LIDER_TECNICO, PERSONAL_TALLER, JEFE_TALLER, SOPORTE |
+| DELETE | `/certifications/:vehicleId` | Eliminar certificación | JEFE_TALLER, SOPORTE |
+
+---
+
+## 📄 DOCUMENTATION — Fase 2
+
+| Método | Ruta | Descripción | Roles |
+|--------|------|-------------|-------|
+| POST | `/documentation/:vehicleId` | **Documentar** → `DOCUMENTADO` (o `DOCUMENTACION_PENDIENTE` si `saveAsPending:true`). Acepta PDFs multipart | DOCUMENTACION, JEFE_TALLER, SOPORTE |
+| GET | `/documentation/:vehicleId` | Obtener documentación | Todos |
+| PATCH | `/documentation/:vehicleId` | Editar documentacion (campos y/o PDFs individuales) | DOCUMENTACION, JEFE_TALLER, SOPORTE |
+| DELETE | `/documentation/:vehicleId` | Eliminar documentación completa | JEFE_TALLER, SOPORTE |
+| DELETE | `/documentation/:vehicleId/files/:fileType` | Eliminar un PDF. fileType: `invoiceUrl` / `giftEmailUrl` / `accessoryInvoiceUrl` | DOCUMENTACION, JEFE_TALLER, SOPORTE |
+| PATCH | `/documentation/:vehicleId/sede` | **Cambio de sede** (Fase 2.2). Body: `{ newSede }`. Sin cambio de estado, registra statusHistory + notifica | DOCUMENTACION, JEFE_TALLER, SOPORTE |
+| PATCH | `/documentation/:vehicleId/transfer` | **Cesion a concesionario** (Fase 2.3) → `CEDIDO` (estado terminal) | DOCUMENTACION, JEFE_TALLER, SOPORTE |
+
+Campos multipart POST/PATCH /documentation:
+```
+invoiceFile          PDF factura del vehiculo
+giftEmailFile        PDF correo de obsequio
+accessoryInvoiceFile PDF factura de accesorios vendidos
+(resto del body como text fields del form)
+```
+
+---
+
+## 🔧 SERVICE-ORDERS — Fase 3
+
+| Método | Ruta | Descripción | Roles |
+|--------|------|-------------|-------|
+| POST | `/service-orders` | **Generar OT** → `ORDEN_GENERADA`. Prerrequisito: `DOCUMENTADO`. Body: `{ vehicleId, orderNumber }` | ASESOR, LIDER_TECNICO, JEFE_TALLER, SOPORTE |
+| GET | `/service-orders` | Listar OTs. Query: `?vehicleId=X&status=ASIGNADA&sede=X` | Todos |
+| GET | `/service-orders/predictions/:vehicleId` | Predicciones de accesorios adicionales (algoritmo historico) | ASESOR, LIDER_TECNICO, JEFE_TALLER, SOPORTE |
+| GET | `/service-orders/:id` | Detalle de OT con checklist | Todos |
+| PATCH | `/service-orders/:id/assign` | **Asignar tecnico** → `ASIGNADO`. Body: `{ technicianUid, technicianName }`. Prerrequisito: `ORDEN_GENERADA` o `REAPERTURA_OT` | LIDER_TECNICO, JEFE_TALLER, SOPORTE |
+| PATCH | `/service-orders/:id/checklist` | **Marcar accesorio** del checklist. Body: `{ accessoryKey, installed: true }`. Al completar todos → `INSTALACION_COMPLETA` automatico | PERSONAL_TALLER, JEFE_TALLER, SOPORTE |
+| PATCH | `/service-orders/:id/ready-for-delivery` | **Aprobar listo para entrega** → `LISTO_PARA_ENTREGA`. Prerrequisito: `INSTALACION_COMPLETA` | LIDER_TECNICO, JEFE_TALLER, SOPORTE |
+| POST | `/service-orders/reopen` | **Reapertura OT** → `REAPERTURA_OT`. Body: `{ vehicleId, newAccessories: [AccessoryKey], reason }` | ASESOR, LIDER_TECNICO, JEFE_TALLER, SOPORTE |
+
+---
+
+## 📅 APPOINTMENTS — Fase 4.1 Agendamiento
+
+| Método | Ruta | Descripción | Roles |
+|--------|------|-------------|-------|
+| POST | `/appointments` | **Agendar entrega** → `AGENDADO`. Prerrequisito: `LISTO_PARA_ENTREGA` | ASESOR, LIDER_TECNICO, JEFE_TALLER, SOPORTE |
+| GET | `/appointments` | Listar agendamientos. Query: `?vehicleId=X&date=2026-02-25&advisorUid=X` | Todos |
+| PATCH | `/appointments/:id` | **Reagendar** (fecha / hora / asesor). Registra audit en statusHistory | ASESOR, LIDER_TECNICO, JEFE_TALLER, SOPORTE |
+
+Body POST /appointments:
 ```json
 {
-  "email": "jefe.taller@kiadealer.com",
-  "password": "KiaDealer2024!"
+  "vehicleId": "uuid-del-vehiculo",
+  "scheduledDate": "2026-02-25",
+  "scheduledTime": "10:00",
+  "assignedAdvisorUid": "uid-firebase",
+  "assignedAdvisorName": "Juan Perez"
 }
 ```
 
-### Respuesta exitosa `200`
+---
 
-```json
-{
-  "idToken": "eyJhbG...",
-  "refreshToken": "AMf-vB...",
-  "expiresIn": 3600,
-  "user": {
-    "uid": "abc123",
-    "email": "jefe.taller@kiadealer.com",
-    "displayName": "Carlos Mendoza (Jefe Taller)",
-    "role": "JEFE_TALLER",
-    "sede": "ALL",
-    "active": true
-  }
-}
+## 🎉 DELIVERY — Fase 4.2 Ceremonia de Entrega
+
+| Método | Ruta | Descripción | Roles |
+|--------|------|-------------|-------|
+| POST | `/delivery/ceremony/:vehicleId` | **Ejecutar ceremonia** → `ENTREGADO`. Solo el dia del agendamiento. Acepta fotos multipart | ASESOR, LIDER_TECNICO, JEFE_TALLER, SOPORTE |
+| GET | `/delivery/ceremony/:vehicleId` | Obtener datos de entrega (fotos, fecha, asesor) | Todos |
+
+Campos multipart POST /delivery/ceremony/:vehicleId:
 ```
-
-| Campo | Descripción |
-|---|---|
-| `idToken` | JWT de Firebase Auth. Válido **1 hora** (3600 s). Usar como `Bearer` en todas las demás peticiones. |
-| `refreshToken` | Token para renovar el `idToken` sin re-autenticar (Firebase REST API). |
-| `expiresIn` | Segundos hasta la expiración del `idToken`. |
-| `user` | Perfil del usuario con rol y sede — leer para adaptar la UI. |
-
-### Errores posibles
-
-| HTTP | Mensaje | Causa |
-|---|---|---|
-| `401` | `No existe una cuenta con ese email.` | Email incorrecto |
-| `401` | `Contraseña incorrecta.` | Password incorrecto |
-| `401` | `Usuario inactivo. Contacte al administrador.` | Cuenta deshabilitada |
-| `401` | `Demasiados intentos fallidos. Intente más tarde.` | Rate-limit Firebase |
-
----
-
-## 1. Vehicles `/vehicles`
-
-| Método | Ruta | Descripción | Roles permitidos |
-|---|---|---|---|
-| `POST` | `/vehicles` | Ingresar vehículo al taller (multipart o JSON) | ASESOR, LIDER_TECNICO, PERSONAL_TALLER, JEFE_TALLER |
-| `GET` | `/vehicles` | Listar vehículos con filtros y paginación | Todos |
-| `GET` | `/vehicles/:id` | Detalle de vehículo (incluye certificación y documentación) | Todos |
-| `GET` | `/vehicles/:id/status-history` | Historial de estados del vehículo | Todos |
-| `GET` | `/vehicles/stats/by-sede` | KPIs por sede | JEFE_TALLER |
-| `GET` | `/vehicles/stats/today-deliveries` | Entregas agendadas para hoy | ASESOR, LIDER_TECNICO, JEFE_TALLER |
-| `PATCH` | `/vehicles/:id` | Editar datos del vehículo | JEFE_TALLER |
-| `DELETE` | `/vehicles/:id` | Eliminar vehículo | JEFE_TALLER |
-
-### Query params — `GET /vehicles`
-
-| Parámetro | Tipo | Descripción |
-|---|---|---|
-| `sede` | `SedeEnum` | Filtra por sede. Cualquier rol puede pasar este parámetro para ver stock de otra sede. Sin sede, el usuario ve la propia (JEFE_TALLER ve todo). |
-| `status` | `string` | Estado(s) separados por coma. Ej: `Recepcionado en Taller,Documentado` |
-| `chassis` | `string` | Búsqueda parcial por número de chasis |
-| `clientId` | `string` | Búsqueda exacta por cédula del cliente |
-| `page` | `number` | Página (default: `1`) |
-| `limit` | `number` | Resultados por página (default: `20`, máx: `100`) |
-
----
-
-## 2. Certifications `/certifications`
-
-| Método | Ruta | Descripción | Roles permitidos |
-|---|---|---|---|
-| `POST` | `/certifications/:vehicleId` | Registrar certificación interna/externa del vehículo (multipart o JSON) | ASESOR, LIDER_TECNICO, PERSONAL_TALLER, JEFE_TALLER |
-| `GET` | `/certifications/:vehicleId` | Obtener certificación de un vehículo | Todos |
-| `PATCH` | `/certifications/:vehicleId` | Editar certificación | JEFE_TALLER |
-
----
-
-## 3. Documentation `/documentation`
-
-| Método | Ruta | Descripción | Roles permitidos |
-|---|---|---|---|
-| `POST` | `/documentation/:vehicleId` | Registrar documentación del vehículo (multipart o JSON) | DOCUMENTACION, JEFE_TALLER |
-| `GET` | `/documentation/:vehicleId` | Obtener documentación del vehículo | DOCUMENTACION, JEFE_TALLER |
-| `PATCH` | `/documentation/:vehicleId` | Editar documentación | DOCUMENTACION, JEFE_TALLER |
-| `PATCH` | `/documentation/:vehicleId/sede` | Cambio de sede del vehículo | DOCUMENTACION, JEFE_TALLER |
-| `PATCH` | `/documentation/:vehicleId/transfer` | Ceder vehículo a otro concesionario (multipart) | DOCUMENTACION, JEFE_TALLER |
-
-### Archivos aceptados — `POST /documentation/:vehicleId`
-
-| Campo | Descripción |
-|---|---|
-| `vehicleInvoice` | Factura del vehículo |
-| `giftEmail` | Email de obsequio |
-| `accessoryInvoice` | Factura de accesorios |
-
----
-
-## 4. Service Orders `/service-orders`
-
-| Método | Ruta | Descripción | Roles permitidos |
-|---|---|---|---|
-| `POST` | `/service-orders` | Generar Orden de Trabajo | ASESOR, LIDER_TECNICO, JEFE_TALLER |
-| `POST` | `/service-orders/reopen` | Reabrir Orden de Trabajo | ASESOR, LIDER_TECNICO, JEFE_TALLER |
-| `GET` | `/service-orders` | Listar órdenes de trabajo | Todos |
-| `GET` | `/service-orders/:id` | Detalle de orden de trabajo | Todos |
-| `GET` | `/service-orders/predictions/:vehicleId` | Predicciones de accesorios para un vehículo | ASESOR, LIDER_TECNICO, JEFE_TALLER |
-| `PATCH` | `/service-orders/:id/assign` | Asignar técnico a la OT | LIDER_TECNICO, JEFE_TALLER |
-| `PATCH` | `/service-orders/:id/checklist` | Actualizar checklist de instalación | PERSONAL_TALLER, JEFE_TALLER |
-| `PATCH` | `/service-orders/:id/ready-for-delivery` | Marcar vehículo listo para entrega | LIDER_TECNICO, JEFE_TALLER |
-
-### Query params — `GET /service-orders`
-
-| Parámetro | Tipo | Descripción |
-|---|---|---|
-| `sede` | `string` | Filtrar por sede |
-| `status` | `string` | Filtrar por estado de la OT |
-| `vehicleId` | `string` | Filtrar por vehículo específico |
-
----
-
-## 5. Appointments `/appointments`
-
-| Método | Ruta | Descripción | Roles permitidos |
-|---|---|---|---|
-| `POST` | `/appointments` | Agendar entrega de vehículo | ASESOR, LIDER_TECNICO, JEFE_TALLER |
-| `GET` | `/appointments` | Listar agendamientos | ASESOR, LIDER_TECNICO, JEFE_TALLER |
-| `PATCH` | `/appointments/:id` | Actualizar / reagendar | ASESOR, LIDER_TECNICO, JEFE_TALLER |
-
-### Query params — `GET /appointments`
-
-| Parámetro | Tipo | Descripción |
-|---|---|---|
-| `dateFrom` | `string` | Fecha inicio (YYYY-MM-DD) |
-| `dateTo` | `string` | Fecha fin (YYYY-MM-DD) |
-
----
-
-## 6. Delivery `/delivery`
-
-| Método | Ruta | Descripción | Roles permitidos |
-|---|---|---|---|
-| `POST` | `/delivery/ceremony/:vehicleId` | Ejecutar ceremonia de entrega (multipart o JSON) | ASESOR, JEFE_TALLER |
-| `GET` | `/delivery/ceremony/:vehicleId` | Obtener ceremonia de entrega | ASESOR, JEFE_TALLER |
-
-### Archivos aceptados — `POST /delivery/ceremony/:vehicleId`
-
-| Campo | Descripción |
-|---|---|
-| `deliveryPhoto` | Foto de la entrega |
-| `signedActa` | Acta firmada |
-
----
-
-## 7. Users `/users`
-
-| Método | Ruta | Descripción | Roles permitidos |
-|---|---|---|---|
-| `POST` | `/users` | Crear usuario en Firebase Auth + Firestore | JEFE_TALLER |
-| `POST` | `/users/fcm-token` | Registrar / actualizar FCM token del dispositivo | Todos |
-| `POST` | `/users/:uid/reset-password` | Enviar link de reset de contraseña | JEFE_TALLER |
-| `GET` | `/users` | Listar usuarios | JEFE_TALLER, LIDER_TECNICO |
-| `GET` | `/users/:uid` | Obtener usuario por UID | JEFE_TALLER |
-| `PATCH` | `/users/:uid` | Editar usuario | JEFE_TALLER |
-| `DELETE` | `/users/:uid` | Desactivar usuario (borrado lógico) | JEFE_TALLER |
-
-### Query params — `GET /users`
-
-| Parámetro | Tipo | Descripción |
-|---|---|---|
-| `role` | `RoleEnum` | Filtrar por rol |
-| `sede` | `SedeEnum` | Filtrar por sede |
-| `active` | `boolean` | Filtrar por estado activo/inactivo |
-
----
-
-## 8. Catalogs `/catalogs`
-
-> Los catálogos de lectura (`GET`) no requieren rol específico.
-
-| Método | Ruta | Descripción | Roles permitidos |
-|---|---|---|---|
-| `GET` | `/catalogs/colors` | Listar colores | Todos |
-| `POST` | `/catalogs/colors` | Crear color | JEFE_TALLER, DOCUMENTACION |
-| `DELETE` | `/catalogs/colors/:id` | Eliminar color | JEFE_TALLER, DOCUMENTACION |
-| `GET` | `/catalogs/models` | Listar modelos de vehículo | Todos |
-| `POST` | `/catalogs/models` | Crear modelo | JEFE_TALLER |
-| `DELETE` | `/catalogs/models/:id` | Eliminar modelo | JEFE_TALLER |
-| `GET` | `/catalogs/concessionaires` | Listar concesionarios | Todos |
-| `POST` | `/catalogs/concessionaires` | Crear concesionario | JEFE_TALLER, DOCUMENTACION |
-| `PATCH` | `/catalogs/concessionaires/:id` | Editar concesionario | JEFE_TALLER, DOCUMENTACION |
-| `DELETE` | `/catalogs/concessionaires/:id` | Eliminar concesionario | JEFE_TALLER |
-| `GET` | `/catalogs/sedes` | Listar sedes | Todos |
-| `POST` | `/catalogs/sedes` | Crear sede | JEFE_TALLER |
-
----
-
-## 9. Notifications `/notifications`
-
-| Método | Ruta | Descripción | Roles permitidos |
-|---|---|---|---|
-| `GET` | `/notifications` | Listar notificaciones del usuario autenticado | Todos |
-| `PATCH` | `/notifications/:id/read` | Marcar notificación como leída | Todos |
-
-### Query params — `GET /notifications`
-
-| Parámetro | Tipo | Descripción |
-|---|---|---|
-| `read` | `boolean` | `false` = solo no leídas |
-| `limit` | `number` | Cantidad máxima (default: `20`) |
-
----
-
-## 10. Reports `/reports`
-
-| Método | Ruta | Descripción | Roles permitidos |
-|---|---|---|---|
-| `GET` | `/reports/vehicle/:vehicleId` | Generar PDF de trazabilidad del vehículo | JEFE_TALLER, ASESOR, LIDER_TECNICO |
-| `GET` | `/reports/analytics` | Analytics y KPIs globales | JEFE_TALLER |
-| `GET` | `/reports/technician-performance/:uid` | Rendimiento de un técnico | PERSONAL_TALLER, JEFE_TALLER |
-
-### Query params — `GET /reports/analytics`
-
-| Parámetro | Tipo | Descripción |
-|---|---|---|
-| `sede` | `string` | Filtrar por sede |
-| `dateFrom` | `string` | Fecha inicio (YYYY-MM-DD) |
-| `dateTo` | `string` | Fecha fin (YYYY-MM-DD) |
-
----
-
-## 11. Seed `/seed`
-
-> ⚠️ Solo para desarrollo y carga inicial de datos. Deshabilitar en producción.
-
-| Método | Ruta | Descripción | Autenticación |
-|---|---|---|---|
-| `POST` | `/seed/run` | Ejecutar seed de base de datos | Sin Bearer — requiere `secretKey` en el body |
-
-### Body — `POST /seed/run`
-
-```json
-{
-  "secretKey": "tu_clave_secreta_aqui",
-  "clear": false
-}
-```
-
-| Campo | Tipo | Descripción |
-|---|---|---|
-| `secretKey` | `string` | Debe coincidir con `SEED_SECRET_KEY` en `.env` |
-| `clear` | `boolean` | Si `true`, borra colecciones antes de insertar (destructivo) |
-
-### Qué inserta el seed
-
-| Sección | Datos |
-|---|---|
-| **Catálogos** | 8 colores, 10 modelos KIA, 3 concesionarios (uno por sede) |
-| **Usuarios** | 14 usuarios en Firebase Auth + Firestore con roles y sedes asignados |
-| **Vehículos** | 14 vehículos distribuidos en las 3 sedes, cubriendo todos los estados del flujo |
-
-#### Credenciales de usuarios seed
-
-| Email | Rol | Sede | Contraseña |
-|---|---|---|---|
-| `jefe.taller@kiadealer.com` | JEFE_TALLER | ALL | `KiaDealer2024!` |
-| `lider.surmotor@kiadealer.com` | LIDER_TECNICO | SURMOTOR | `KiaDealer2024!` |
-| `lider.shyris@kiadealer.com` | LIDER_TECNICO | SHYRIS | `KiaDealer2024!` |
-| `lider.granadas@kiadealer.com` | LIDER_TECNICO | GRANADAS_CENTENOS | `KiaDealer2024!` |
-| `asesor.surmotor@kiadealer.com` | ASESOR | SURMOTOR | `KiaDealer2024!` |
-| `asesor.shyris@kiadealer.com` | ASESOR | SHYRIS | `KiaDealer2024!` |
-| `asesor.granadas@kiadealer.com` | ASESOR | GRANADAS_CENTENOS | `KiaDealer2024!` |
-| `taller1.surmotor@kiadealer.com` | PERSONAL_TALLER | SURMOTOR | `KiaDealer2024!` |
-| `taller2.surmotor@kiadealer.com` | PERSONAL_TALLER | SURMOTOR | `KiaDealer2024!` |
-| `taller1.shyris@kiadealer.com` | PERSONAL_TALLER | SHYRIS | `KiaDealer2024!` |
-| `taller1.granadas@kiadealer.com` | PERSONAL_TALLER | GRANADAS_CENTENOS | `KiaDealer2024!` |
-| `docs.surmotor@kiadealer.com` | DOCUMENTACION | SURMOTOR | `KiaDealer2024!` |
-| `docs.shyris@kiadealer.com` | DOCUMENTACION | SHYRIS | `KiaDealer2024!` |
-| `docs.granadas@kiadealer.com` | DOCUMENTACION | GRANADAS_CENTENOS | `KiaDealer2024!` |
-
----
-
-## Flujo de estados de un vehículo
-
-```
-RECEPCIONADO
-    └─► CERTIFICADO_STOCK          (Certifications)
-            └─► DOCUMENTACIÓN_PENDIENTE → DOCUMENTADO    (Documentation)
-                    └─► ORDEN_GENERADA                   (Service Orders)
-                            └─► ASIGNADO
-                                    └─► EN_INSTALACION
-                                            └─► INSTALACION_COMPLETA
-                                                    └─► LISTO_PARA_ENTREGA
-                                                            └─► AGENDADO     (Appointments)
-                                                                    └─► ENTREGADO    (Delivery)
-
-Estados de excepción:
-  REAPERTURA_OT → puede volver al flujo de OT
-  CEDIDO        → vehículo transferido a otro concesionario
+vehiclePhoto    foto con el vehiculo (binary)
+signedActaPhoto foto del acta firmada (binary)
+clientComment   comentario del cliente (text field)
 ```
 
 ---
 
-## Variables de entorno requeridas (`.env`)
+## 📋 CATALOGS — Datos maestros
 
-| Variable | Descripción |
-|---|---|
-| `PORT` | Puerto del servidor (default: `3000`) |
-| `FIREBASE_PROJECT_ID` | ID del proyecto Firebase |
-| `FIREBASE_CLIENT_EMAIL` | Email de la Service Account |
-| `FIREBASE_PRIVATE_KEY` | Clave privada RSA (con `\n` escapados) |
-| `FIREBASE_STORAGE_BUCKET` | Bucket de Storage (sin `gs://`) |
-| `PREDICTION_THRESHOLD` | Umbral mínimo (0–100) para predicciones de accesorios |
-| `FIREBASE_WEB_API_KEY` | Web API Key del proyecto Firebase (requerida por `/auth/login`) |
-| `SEED_SECRET_KEY` | Clave para proteger el endpoint `/seed/run` |
-| `NODE_ENV` | `development` / `production` |
+| Método | Ruta | Descripción | Roles |
+|--------|------|-------------|-------|
+| GET | `/catalogs/colors` | Listar colores | Todos |
+| POST | `/catalogs/colors` | Crear color. Body: `{ name }` → MAYUSCULAS | JEFE_TALLER, DOCUMENTACION, SOPORTE |
+| DELETE | `/catalogs/colors/:id` | Eliminar color | JEFE_TALLER, SOPORTE |
+| GET | `/catalogs/models` | Listar modelos | Todos |
+| POST | `/catalogs/models` | Crear modelo | JEFE_TALLER, SOPORTE |
+| DELETE | `/catalogs/models/:id` | Eliminar modelo | JEFE_TALLER, SOPORTE |
+| GET | `/catalogs/concessionaires` | Listar concesionarios | Todos |
+| POST | `/catalogs/concessionaires` | Crear concesionario | JEFE_TALLER, DOCUMENTACION, SOPORTE |
+| PATCH | `/catalogs/concessionaires/:id` | Editar nombre | JEFE_TALLER, DOCUMENTACION, SOPORTE |
+| DELETE | `/catalogs/concessionaires/:id` | Eliminar | JEFE_TALLER, SOPORTE |
+| GET | `/catalogs/sedes` | Listar sedes | Todos |
+| POST | `/catalogs/sedes` | Crear sede. Body: `{ name, code }` → MAYUSCULAS | JEFE_TALLER, SOPORTE |
+| GET | `/catalogs/accessories` | Listar accesorios (`id`, `name`, `key`) | Todos |
+| POST | `/catalogs/accessories` | Crear accesorio. Body: `{ name, key }` → MAYUSCULAS | JEFE_TALLER, SOPORTE |
+| PATCH | `/catalogs/accessories/:id` | Editar nombre de accesorio | JEFE_TALLER, SOPORTE |
+| DELETE | `/catalogs/accessories/:id` | Eliminar accesorio | JEFE_TALLER, SOPORTE |
+
+---
+
+## 📊 REPORTS
+
+| Método | Ruta | Descripción | Roles |
+|--------|------|-------------|-------|
+| GET | `/reports/vehicle/:vehicleId` | Reporte completo del ciclo de vida del vehiculo | JEFE_TALLER, SOPORTE, DOCUMENTACION |
+| GET | `/reports/analytics` | Analytics globales: tiempos por fase, volumen por sede. Query: `?sede=X&from=2026-01-01&to=2026-02-28` | JEFE_TALLER, SOPORTE |
+| GET | `/reports/technician-performance/:uid` | Performance de tecnico (OTs, tiempo promedio) | JEFE_TALLER, SOPORTE |
+
+---
+
+## 🔁 Flujo secuencial de endpoints por vehiculo
+
+```
+1.  POST   /vehicles                                → RECEPCIONADO
+2.  POST   /certifications/:vehicleId               → CERTIFICADO_STOCK
+3.  POST   /documentation/:vehicleId                → DOCUMENTADO / DOCUMENTACION_PENDIENTE
+    ├─     PATCH /documentation/:vehicleId/sede     → cambio de sede (sin cambio de estado)
+    └─     PATCH /documentation/:vehicleId/transfer → CEDIDO (fin)
+4.  POST   /service-orders                          → ORDEN_GENERADA
+    └─     GET   /service-orders/predictions/:vid   → sugerencias ML
+5.  PATCH  /service-orders/:id/assign               → ASIGNADA
+6.  PATCH  /service-orders/:id/checklist (x N)      → EN_INSTALACION → INSTALACION_COMPLETA
+    └─     POST  /service-orders/reopen             → REAPERTURA_OT → volver al paso 5
+7.  PATCH  /service-orders/:id/ready-for-delivery   → LISTO_PARA_ENTREGA
+8.  POST   /appointments                            → AGENDADO
+    └─     PATCH /appointments/:id                  → reagendar
+9.  POST   /delivery/ceremony/:vehicleId            → ENTREGADO
+
+En cualquier momento:
+    GET    /vehicles/:id/status-history             → trazabilidad completa
+```
+
+---
+
+## 📌 Enums de referencia
+
+### VehicleStatus
+`RECEPCIONADO` · `CERTIFICADO_STOCK` · `DOCUMENTACION_PENDIENTE` · `DOCUMENTADO` · `ORDEN_GENERADA` · `ASIGNADO` · `EN_INSTALACION` · `INSTALACION_COMPLETA` · `REAPERTURA_OT` · `LISTO_PARA_ENTREGA` · `AGENDADO` · `ENTREGADO` · `CEDIDO`
+
+### RoleEnum
+`JEFE_TALLER` · `ASESOR` · `LIDER_TECNICO` · `PERSONAL_TALLER` · `DOCUMENTACION` · `SOPORTE`
+
+### AccessoryKey (valores del enum)
+`BOTON_ENCENDIDO` · `KIT_CARRETERA` · `AROS` · `LAMINAS` · `MOQUETAS` · `CUBREMALETAS` · `SEGURO` · `TELEMETRIA` · `SENSORES` · `ALARMA` · `NEBLINEROS` · `KIT_SEGURIDAD` · `PROTECTOR_CERAMICO` · `OTROS`
+
+### AccessoryClassification
+`VENDIDO` · `OBSEQUIADO` · `NO_APLICA`
+
+### PaymentMethod
+`CONTADO` · `CREDITO`

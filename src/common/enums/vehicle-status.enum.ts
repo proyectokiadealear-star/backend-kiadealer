@@ -1,24 +1,24 @@
 export enum VehicleStatus {
   // FASE 1 — INGRESO Y CERTIFICACIÓN
-  RECEPCIONADO = 'Recepcionado en Taller',
-  CERTIFICADO_STOCK = 'Certificado en Stock',
+  RECEPCIONADO = 'RECEPCIONADO',
+  CERTIFICADO_STOCK = 'CERTIFICADO_STOCK',
 
   // FASE 2 — DOCUMENTACIÓN
-  DOCUMENTACION_PENDIENTE = 'Documentación Pendiente',
-  DOCUMENTADO = 'Documentado',
+  DOCUMENTACION_PENDIENTE = 'DOCUMENTACION_PENDIENTE',
+  DOCUMENTADO = 'DOCUMENTADO',
 
   // FASE 3 — ACCESORIZACIÓN
-  ORDEN_GENERADA = 'Orden de Trabajo Generada',
-  ASIGNADO = 'Asignado a Técnico',
-  EN_INSTALACION = 'En Instalación',
-  INSTALACION_COMPLETA = 'Instalación Completada',
+  ORDEN_GENERADA = 'ORDEN_GENERADA',
+  ASIGNADO = 'ASIGNADO',
+  EN_INSTALACION = 'EN_INSTALACION',
+  INSTALACION_COMPLETA = 'INSTALACION_COMPLETA',
 
   // FASE 4 — ENTREGA
-  LISTO_PARA_ENTREGA = 'Listo para Entrega',
-  AGENDADO = 'Agendado para Entrega',
-  ENTREGADO = 'Entregado',
+  LISTO_PARA_ENTREGA = 'LISTO_PARA_ENTREGA',
+  AGENDADO = 'AGENDADO',
+  ENTREGADO = 'ENTREGADO',
 
   // ESTADOS DE EXCEPCIÓN
-  REAPERTURA_OT = 'Reapertura de Orden',
-  CEDIDO = 'Cedido a otro Concesionario',
+  REAPERTURA_OT = 'REAPERTURA_OT',
+  CEDIDO = 'CEDIDO',
 }

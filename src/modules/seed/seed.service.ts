@@ -68,8 +68,11 @@ export class SeedService {
   // CLEAR (solo dev)
   // ──────────────────────────────────────────────────────────────────────
   private async clearCollections(): Promise<void> {
-    const collections = ['vehicles', 'documentations'];
-    const catalogSubcollections = ['colors', 'models', 'concessionaires'];
+    const collections = [
+      'vehicles', 'documentations', 'certifications',
+      'service-orders', 'appointments', 'deliveries', 'notifications',
+    ];
+    const catalogSubcollections = ['colors', 'models', 'concessionaires', 'accessories', 'sedes'];
 
     for (const col of collections) {
       try {
@@ -105,21 +108,44 @@ export class SeedService {
   // ──────────────────────────────────────────────────────────────────────
   private async seedCatalogs(): Promise<Record<string, number>> {
     const colors = [
-      'Blanco Glaciar', 'Negro Perla', 'Rojo Aurora',
-      'Azul Safiro', 'Gris Platino', 'Plata Meteórico',
-      'Verde Esmeralda', 'Café Bronce',
+      'BLANCO GLACIAR', 'NEGRO PERLA', 'ROJO AURORA', 'AZUL SAFIRO',
+      'GRIS PLATINO', 'PLATA METEORICO', 'VERDE ESMERALDA', 'CAFE BRONCE',
+      'BLANCO PERLA', 'NEGRO MEDIANOCHE', 'GRIS ACERO', 'AZUL CIELO',
     ];
 
     const models = [
-      'KIA Sportage', 'KIA Picanto', 'KIA Rio', 'KIA Sorento',
-      'KIA Stinger', 'KIA Soul', 'KIA Seltos', 'KIA EV6',
-      'KIA Carnival', 'KIA Telluride',
+      'KIA SPORTAGE', 'KIA PICANTO', 'KIA RIO', 'KIA SORENTO',
+      'KIA STINGER', 'KIA SOUL', 'KIA SELTOS', 'KIA EV6',
+      'KIA CARNIVAL', 'KIA TELLURIDE',
     ];
 
     const concessionaires = [
-      { name: 'KIA Surmotor', code: SedeEnum.SURMOTOR },
-      { name: 'KIA Shyris', code: SedeEnum.SHYRIS },
-      { name: 'KIA Granadas Centenos', code: SedeEnum.GRANADAS_CENTENOS },
+      { name: 'KIA SURMOTOR', code: SedeEnum.SURMOTOR },
+      { name: 'KIA SHYRIS', code: SedeEnum.SHYRIS },
+      { name: 'KIA GRANADAS CENTENOS', code: SedeEnum.GRANADAS_CENTENOS },
+    ];
+
+    const sedes = [
+      { name: 'SURMOTOR', code: SedeEnum.SURMOTOR },
+      { name: 'SHYRIS', code: SedeEnum.SHYRIS },
+      { name: 'GRANADAS CENTENOS', code: SedeEnum.GRANADAS_CENTENOS },
+    ];
+
+    const accessories = [
+      { name: 'BOTON DE ENCENDIDO',     key: AccessoryKey.BOTON_ENCENDIDO },
+      { name: 'KIT DE CARRETERA',        key: AccessoryKey.KIT_CARRETERA },
+      { name: 'AROS',                    key: AccessoryKey.AROS },
+      { name: 'LAMINAS',                 key: AccessoryKey.LAMINAS },
+      { name: 'MOQUETAS',                key: AccessoryKey.MOQUETAS },
+      { name: 'CUBREMALETAS',            key: AccessoryKey.CUBREMALETAS },
+      { name: 'SEGURO SATELITAL',        key: AccessoryKey.SEGURO },
+      { name: 'TELEMETRIA',              key: AccessoryKey.TELEMETRIA },
+      { name: 'SENSORES DE PROXIMIDAD',  key: AccessoryKey.SENSORES },
+      { name: 'ALARMA',                  key: AccessoryKey.ALARMA },
+      { name: 'NEBLINEROS',              key: AccessoryKey.NEBLINEROS },
+      { name: 'KIT DE SEGURIDAD',        key: AccessoryKey.KIT_SEGURIDAD },
+      { name: 'PROTECTOR CERAMICO',      key: AccessoryKey.PROTECTOR_CERAMICO },
+      { name: 'OTROS',                   key: AccessoryKey.OTROS },
     ];
 
     const savedColors = await this.bulkUpsertCatalog('colors', colors.map((name) => ({ name })));
@@ -128,9 +154,26 @@ export class SeedService {
       'concessionaires',
       concessionaires.map((c) => ({ name: c.name, code: c.code })),
     );
+    const savedSedes = await this.bulkUpsertCatalog(
+      'sedes',
+      sedes.map((s) => ({ name: s.name, code: s.code })),
+    );
+    const savedAccessories = await this.bulkUpsertCatalog(
+      'accessories',
+      accessories.map((a) => ({ name: a.name, key: a.key })),
+    );
 
-    this.logger.log(`📦 Catálogos: ${savedColors} colores, ${savedModels} modelos, ${savedConcessionaires} concesionarios`);
-    return { colors: savedColors, models: savedModels, concessionaires: savedConcessionaires };
+    this.logger.log(
+      `📦 Catálogos: ${savedColors} colores, ${savedModels} modelos, ` +
+      `${savedConcessionaires} concesionarios, ${savedSedes} sedes, ${savedAccessories} accesorios`,
+    );
+    return {
+      colors: savedColors,
+      models: savedModels,
+      concessionaires: savedConcessionaires,
+      sedes: savedSedes,
+      accessories: savedAccessories,
+    };
   }
 
   /** Convierte un nombre en un ID safe para Firestore (sin tildes ni espacios) */
@@ -377,119 +420,119 @@ export class SeedService {
       // ── SURMOTOR ────────────────────────────────────────────────
       {
         chassis: `KIA-SM-${year}-001`,
-        model: 'KIA Sportage',
-        color: 'Blanco Glaciar',
+        model: 'KIA SPORTAGE',
+        color: 'BLANCO GLACIAR',
         sede: SedeEnum.SURMOTOR,
         status: VehicleStatus.RECEPCIONADO,
-        originConcessionaire: 'KIA Surmotor',
+        originConcessionaire: 'KIA SURMOTOR',
       },
       {
         chassis: `KIA-SM-${year}-002`,
-        model: 'KIA Picanto',
-        color: 'Rojo Aurora',
+        model: 'KIA PICANTO',
+        color: 'ROJO AURORA',
         sede: SedeEnum.SURMOTOR,
         status: VehicleStatus.CERTIFICADO_STOCK,
-        originConcessionaire: 'KIA Surmotor',
+        originConcessionaire: 'KIA SURMOTOR',
       },
       {
         chassis: `KIA-SM-${year}-003`,
-        model: 'KIA Rio',
-        color: 'Negro Perla',
+        model: 'KIA RIO',
+        color: 'NEGRO PERLA',
         sede: SedeEnum.SURMOTOR,
         status: VehicleStatus.DOCUMENTACION_PENDIENTE,
-        originConcessionaire: 'KIA Surmotor',
+        originConcessionaire: 'KIA SURMOTOR',
       },
       {
         chassis: `KIA-SM-${year}-004`,
-        model: 'KIA Sorento',
-        color: 'Gris Platino',
+        model: 'KIA SORENTO',
+        color: 'GRIS PLATINO',
         sede: SedeEnum.SURMOTOR,
         status: VehicleStatus.DOCUMENTADO,
-        originConcessionaire: 'KIA Surmotor',
+        originConcessionaire: 'KIA SURMOTOR',
       },
       {
         chassis: `KIA-SM-${year}-005`,
-        model: 'KIA Seltos',
-        color: 'Azul Safiro',
+        model: 'KIA SELTOS',
+        color: 'AZUL SAFIRO',
         sede: SedeEnum.SURMOTOR,
         status: VehicleStatus.LISTO_PARA_ENTREGA,
-        originConcessionaire: 'KIA Surmotor',
+        originConcessionaire: 'KIA SURMOTOR',
       },
 
       // ── SHYRIS ──────────────────────────────────────────────────
       {
         chassis: `KIA-SH-${year}-001`,
         model: 'KIA EV6',
-        color: 'Plata Meteórico',
+        color: 'PLATA METEORICO',
         sede: SedeEnum.SHYRIS,
         status: VehicleStatus.RECEPCIONADO,
-        originConcessionaire: 'KIA Shyris',
+        originConcessionaire: 'KIA SHYRIS',
       },
       {
         chassis: `KIA-SH-${year}-002`,
-        model: 'KIA Stinger',
-        color: 'Negro Perla',
+        model: 'KIA STINGER',
+        color: 'NEGRO PERLA',
         sede: SedeEnum.SHYRIS,
         status: VehicleStatus.DOCUMENTACION_PENDIENTE,
-        originConcessionaire: 'KIA Shyris',
+        originConcessionaire: 'KIA SHYRIS',
       },
       {
         chassis: `KIA-SH-${year}-003`,
-        model: 'KIA Carnival',
-        color: 'Blanco Glaciar',
+        model: 'KIA CARNIVAL',
+        color: 'BLANCO GLACIAR',
         sede: SedeEnum.SHYRIS,
         status: VehicleStatus.ORDEN_GENERADA,
-        originConcessionaire: 'KIA Shyris',
+        originConcessionaire: 'KIA SHYRIS',
       },
       {
         chassis: `KIA-SH-${year}-004`,
-        model: 'KIA Soul',
-        color: 'Verde Esmeralda',
+        model: 'KIA SOUL',
+        color: 'VERDE ESMERALDA',
         sede: SedeEnum.SHYRIS,
         status: VehicleStatus.EN_INSTALACION,
-        originConcessionaire: 'KIA Shyris',
+        originConcessionaire: 'KIA SHYRIS',
       },
       {
         chassis: `KIA-SH-${year}-005`,
-        model: 'KIA Sorento',
-        color: 'Gris Platino',
+        model: 'KIA SORENTO',
+        color: 'GRIS PLATINO',
         sede: SedeEnum.SHYRIS,
         status: VehicleStatus.INSTALACION_COMPLETA,
-        originConcessionaire: 'KIA Shyris',
+        originConcessionaire: 'KIA SHYRIS',
       },
 
       // ── GRANADAS CENTENOS ────────────────────────────────────────
       {
         chassis: `KIA-GC-${year}-001`,
-        model: 'KIA Telluride',
-        color: 'Café Bronce',
+        model: 'KIA TELLURIDE',
+        color: 'CAFE BRONCE',
         sede: SedeEnum.GRANADAS_CENTENOS,
         status: VehicleStatus.RECEPCIONADO,
-        originConcessionaire: 'KIA Granadas Centenos',
+        originConcessionaire: 'KIA GRANADAS CENTENOS',
       },
       {
         chassis: `KIA-GC-${year}-002`,
-        model: 'KIA Sportage',
-        color: 'Rojo Aurora',
+        model: 'KIA SPORTAGE',
+        color: 'ROJO AURORA',
         sede: SedeEnum.GRANADAS_CENTENOS,
         status: VehicleStatus.CERTIFICADO_STOCK,
-        originConcessionaire: 'KIA Granadas Centenos',
+        originConcessionaire: 'KIA GRANADAS CENTENOS',
       },
       {
         chassis: `KIA-GC-${year}-003`,
-        model: 'KIA Rio',
-        color: 'Azul Safiro',
+        model: 'KIA RIO',
+        color: 'AZUL SAFIRO',
         sede: SedeEnum.GRANADAS_CENTENOS,
         status: VehicleStatus.LISTO_PARA_ENTREGA,
-        originConcessionaire: 'KIA Granadas Centenos',
+        originConcessionaire: 'KIA GRANADAS CENTENOS',
       },
       {
         chassis: `KIA-GC-${year}-004`,
-        model: 'KIA Picanto',
-        color: 'Plata Meteórico',
+        model: 'KIA PICANTO',
+        color: 'PLATA METEORICO',
         sede: SedeEnum.GRANADAS_CENTENOS,
         status: VehicleStatus.ENTREGADO,
-        originConcessionaire: 'KIA Granadas Centenos',
+        originConcessionaire: 'KIA GRANADAS CENTENOS',
       },
     ];
 
@@ -587,7 +630,7 @@ export class SeedService {
       paymentMethod: 'CREDITO',
       hasFinancing: true,
       financingEntity: 'Banco Pichincha',
-      clientName: `Cliente Demo - ${vehicle.chassis}`,
+      clientName: `CLIENTE DEMO - ${vehicle.chassis}`,
       clientId: `1${Math.floor(Math.random() * 900000000 + 100000000)}`,
       clientPhone: `09${Math.floor(Math.random() * 90000000 + 10000000)}`,
       documentedBy: byUid,
