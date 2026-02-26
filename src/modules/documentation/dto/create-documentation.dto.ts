@@ -91,11 +91,18 @@ export class CreateDocumentationDto {
   @ApiProperty({
     type: [AccessoryItemDto],
     description:
-      'Clasificación de los 14 accesorios (VENDIDO / OBSEQUIADO / NO_APLICA). El campo "otros" admite notes de texto libre.',
+      'Clasificación de los 14 accesorios (VENDIDO / OBSEQUIADO / NO_APLICA). El campo "otros" admite notes de texto libre. ' +
+      'En multipart/form-data enviar como JSON serializado: `JSON.stringify([...])`.',
   })
   @IsArray()
   @ValidateNested({ each: true })
   @Type(() => AccessoryItemDto)
+  @Transform(({ value }) => {
+    if (typeof value === 'string') {
+      try { return JSON.parse(value); } catch { return value; }
+    }
+    return value;
+  })
   accessories: AccessoryItemDto[];
 
   @ApiPropertyOptional({
@@ -105,5 +112,10 @@ export class CreateDocumentationDto {
   })
   @IsOptional()
   @IsBoolean()
+  @Transform(({ value }) => {
+    if (value === 'true') return true;
+    if (value === 'false') return false;
+    return value;
+  })
   saveAsPending?: boolean;
 }

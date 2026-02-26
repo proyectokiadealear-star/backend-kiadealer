@@ -30,7 +30,7 @@ import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { RoleEnum } from '../../common/enums/role.enum';
 import { SedeEnum } from '../../common/enums/sede.enum';
 import type { AuthenticatedUser } from '../../common/interfaces/authenticated-user.interface';
-import { ApiProperty } from '@nestjs/swagger';
+import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 
 class ChangeSedDto {
   @ApiProperty({ enum: SedeEnum, description: 'Nueva sede destino del vehículo' })
@@ -42,6 +42,40 @@ class TransferDto {
   @ApiProperty({ description: 'Nombre del concesionario destino', example: 'LogiManta' })
   @IsString() @IsNotEmpty()
   targetConcessionaire: string;
+}
+
+/** Esquema Swagger para POST multipart/form-data con archivos */
+class CreateDocumentationMultipartDto {
+  @ApiProperty({ example: 'PEDRO GARCIA LOPEZ' }) clientName: string;
+  @ApiProperty({ example: '1723456789' }) clientId: string;
+  @ApiProperty({ example: '0991234567' }) clientPhone: string;
+  @ApiProperty({ enum: ['NORMAL', 'RAPIDA', 'EXCLUSIVA'] }) registrationType: string;
+  @ApiProperty({ enum: ['CONTADO', 'CREDITO'] }) paymentMethod: string;
+  @ApiProperty({
+    description: 'JSON serializado. Ejemplo: [{"key":"aros","classification":"VENDIDO"},{"key":"otros","classification":"NO_APLICA"}]',
+    example: '[{"key":"aros","classification":"VENDIDO"},{"key":"moquetas","classification":"OBSEQUIADO"}]',
+  }) accessories: string;
+  @ApiPropertyOptional({ default: false }) saveAsPending?: boolean;
+  @ApiPropertyOptional({ type: 'string', format: 'binary', description: 'PDF — Factura del vehículo' }) vehicleInvoice?: Express.Multer.File;
+  @ApiPropertyOptional({ type: 'string', format: 'binary', description: 'PDF — Correo de obsequio' }) giftEmail?: Express.Multer.File;
+  @ApiPropertyOptional({ type: 'string', format: 'binary', description: 'PDF — Factura de accesorios' }) accessoryInvoice?: Express.Multer.File;
+}
+
+/** Esquema Swagger para PATCH multipart/form-data con archivos */
+class UpdateDocumentationMultipartDto {
+  @ApiPropertyOptional({ example: 'PEDRO GARCIA LOPEZ' }) clientName?: string;
+  @ApiPropertyOptional({ example: '1723456789' }) clientId?: string;
+  @ApiPropertyOptional({ example: '0991234567' }) clientPhone?: string;
+  @ApiPropertyOptional({ enum: ['NORMAL', 'RAPIDA', 'EXCLUSIVA'] }) registrationType?: string;
+  @ApiPropertyOptional({ enum: ['CONTADO', 'CREDITO'] }) paymentMethod?: string;
+  @ApiPropertyOptional({
+    description: 'JSON serializado (reemplaza array completo)',
+    example: '[{"key":"aros","classification":"VENDIDO"}]',
+  }) accessories?: string;
+  @ApiPropertyOptional({ description: 'false → completa la documentación pendiente y avanza a DOCUMENTADO' }) saveAsPending?: boolean;
+  @ApiPropertyOptional({ type: 'string', format: 'binary', description: 'PDF — reemplaza factura del vehículo existente' }) vehicleInvoice?: Express.Multer.File;
+  @ApiPropertyOptional({ type: 'string', format: 'binary', description: 'PDF — reemplaza correo de obsequio existente' }) giftEmail?: Express.Multer.File;
+  @ApiPropertyOptional({ type: 'string', format: 'binary', description: 'PDF — reemplaza factura de accesorios existente' }) accessoryInvoice?: Express.Multer.File;
 }
 
 @ApiTags('Documentation')
@@ -59,8 +93,8 @@ export class DocumentationController {
       'Asocia cliente, PDFs y clasificación de accesorios al vehículo. Con `saveAsPending=true` queda en DOCUMENTACION_PENDIENTE (bloquea OT). PDFs se suben a Firebase Storage. **Roles:** DOCUMENTACION, JEFE_TALLER, SOPORTE',
   })
   @ApiParam({ name: 'vehicleId', description: 'ID del vehículo (UUID)' })
-  @ApiConsumes('multipart/form-data', 'application/json')
-  @ApiBody({ type: CreateDocumentationDto })
+  @ApiConsumes('multipart/form-data')
+  @ApiBody({ type: CreateDocumentationMultipartDto })
   @ApiResponse({ status: 201, description: 'Documentación registrada. Estado: DOCUMENTADO o DOCUMENTACION_PENDIENTE' })
   @ApiResponse({ status: 400, description: 'Vehículo no está en CERTIFICADO_STOCK o DOCUMENTACION_PENDIENTE' })
   @ApiResponse({ status: 401, description: 'Token inválido o ausente' })
@@ -114,8 +148,8 @@ export class DocumentationController {
       'Permite actualizar datos del cliente, accesorios y reemplazar PDFs. Si se envían nuevos archivos, los anteriores son eliminados de Storage. **Roles:** DOCUMENTACION, JEFE_TALLER, SOPORTE',
   })
   @ApiParam({ name: 'vehicleId', description: 'ID del vehículo (UUID)' })
-  @ApiConsumes('multipart/form-data', 'application/json')
-  @ApiBody({ type: CreateDocumentationDto })
+  @ApiConsumes('multipart/form-data')
+  @ApiBody({ type: UpdateDocumentationMultipartDto })
   @ApiResponse({ status: 200, description: 'Documentación actualizada' })
   @ApiResponse({ status: 403, description: 'Rol no autorizado' })
   @ApiResponse({ status: 404, description: 'Documentación no encontrada' })
