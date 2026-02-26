@@ -120,9 +120,12 @@ export class SeedService {
     ];
 
     const concessionaires = [
-      { name: 'KIA SURMOTOR', code: SedeEnum.SURMOTOR },
-      { name: 'KIA SHYRIS', code: SedeEnum.SHYRIS },
-      { name: 'KIA GRANADAS CENTENOS', code: SedeEnum.GRANADAS_CENTENOS },
+      { name: 'LOGIMANTA' },
+      { name: 'ASIAUTO' },
+      { name: 'KMOTOR' },
+      { name: 'EMPROMOTOR' },
+      { name: 'MOTRICENTRO' },
+      { name: 'IOKARS' },
     ];
 
     const sedes = [
@@ -152,7 +155,7 @@ export class SeedService {
     const savedModels = await this.bulkUpsertCatalog('models', models.map((name) => ({ name })));
     const savedConcessionaires = await this.bulkUpsertCatalog(
       'concessionaires',
-      concessionaires.map((c) => ({ name: c.name, code: c.code })),
+      concessionaires.map((c) => ({ name: c.name })),
     );
     const savedSedes = await this.bulkUpsertCatalog(
       'sedes',
@@ -424,7 +427,7 @@ export class SeedService {
         color: 'BLANCO GLACIAR',
         sede: SedeEnum.SURMOTOR,
         status: VehicleStatus.RECEPCIONADO,
-        originConcessionaire: 'KIA SURMOTOR',
+        originConcessionaire: 'LOGIMANTA',
       },
       {
         chassis: `KIA-SM-${year}-002`,
@@ -432,7 +435,7 @@ export class SeedService {
         color: 'ROJO AURORA',
         sede: SedeEnum.SURMOTOR,
         status: VehicleStatus.CERTIFICADO_STOCK,
-        originConcessionaire: 'KIA SURMOTOR',
+        originConcessionaire: 'ASIAUTO',
       },
       {
         chassis: `KIA-SM-${year}-003`,
@@ -440,7 +443,7 @@ export class SeedService {
         color: 'NEGRO PERLA',
         sede: SedeEnum.SURMOTOR,
         status: VehicleStatus.DOCUMENTACION_PENDIENTE,
-        originConcessionaire: 'KIA SURMOTOR',
+        originConcessionaire: 'KMOTOR',
       },
       {
         chassis: `KIA-SM-${year}-004`,
@@ -448,7 +451,7 @@ export class SeedService {
         color: 'GRIS PLATINO',
         sede: SedeEnum.SURMOTOR,
         status: VehicleStatus.DOCUMENTADO,
-        originConcessionaire: 'KIA SURMOTOR',
+        originConcessionaire: 'EMPROMOTOR',
       },
       {
         chassis: `KIA-SM-${year}-005`,
@@ -456,7 +459,7 @@ export class SeedService {
         color: 'AZUL SAFIRO',
         sede: SedeEnum.SURMOTOR,
         status: VehicleStatus.LISTO_PARA_ENTREGA,
-        originConcessionaire: 'KIA SURMOTOR',
+        originConcessionaire: 'MOTRICENTRO',
       },
 
       // ── SHYRIS ──────────────────────────────────────────────────
@@ -466,7 +469,7 @@ export class SeedService {
         color: 'PLATA METEORICO',
         sede: SedeEnum.SHYRIS,
         status: VehicleStatus.RECEPCIONADO,
-        originConcessionaire: 'KIA SHYRIS',
+        originConcessionaire: 'IOKARS',
       },
       {
         chassis: `KIA-SH-${year}-002`,
@@ -474,7 +477,7 @@ export class SeedService {
         color: 'NEGRO PERLA',
         sede: SedeEnum.SHYRIS,
         status: VehicleStatus.DOCUMENTACION_PENDIENTE,
-        originConcessionaire: 'KIA SHYRIS',
+        originConcessionaire: 'LOGIMANTA',
       },
       {
         chassis: `KIA-SH-${year}-003`,
@@ -482,7 +485,7 @@ export class SeedService {
         color: 'BLANCO GLACIAR',
         sede: SedeEnum.SHYRIS,
         status: VehicleStatus.ORDEN_GENERADA,
-        originConcessionaire: 'KIA SHYRIS',
+        originConcessionaire: 'KMOTOR',
       },
       {
         chassis: `KIA-SH-${year}-004`,
@@ -490,7 +493,7 @@ export class SeedService {
         color: 'VERDE ESMERALDA',
         sede: SedeEnum.SHYRIS,
         status: VehicleStatus.EN_INSTALACION,
-        originConcessionaire: 'KIA SHYRIS',
+        originConcessionaire: 'ASIAUTO',
       },
       {
         chassis: `KIA-SH-${year}-005`,
@@ -498,7 +501,7 @@ export class SeedService {
         color: 'GRIS PLATINO',
         sede: SedeEnum.SHYRIS,
         status: VehicleStatus.INSTALACION_COMPLETA,
-        originConcessionaire: 'KIA SHYRIS',
+        originConcessionaire: 'MOTRICENTRO',
       },
 
       // ── GRANADAS CENTENOS ────────────────────────────────────────
@@ -508,7 +511,7 @@ export class SeedService {
         color: 'CAFE BRONCE',
         sede: SedeEnum.GRANADAS_CENTENOS,
         status: VehicleStatus.RECEPCIONADO,
-        originConcessionaire: 'KIA GRANADAS CENTENOS',
+        originConcessionaire: 'EMPROMOTOR',
       },
       {
         chassis: `KIA-GC-${year}-002`,
@@ -516,7 +519,7 @@ export class SeedService {
         color: 'ROJO AURORA',
         sede: SedeEnum.GRANADAS_CENTENOS,
         status: VehicleStatus.CERTIFICADO_STOCK,
-        originConcessionaire: 'KIA GRANADAS CENTENOS',
+        originConcessionaire: 'IOKARS',
       },
       {
         chassis: `KIA-GC-${year}-003`,
@@ -524,7 +527,7 @@ export class SeedService {
         color: 'AZUL SAFIRO',
         sede: SedeEnum.GRANADAS_CENTENOS,
         status: VehicleStatus.LISTO_PARA_ENTREGA,
-        originConcessionaire: 'KIA GRANADAS CENTENOS',
+        originConcessionaire: 'LOGIMANTA',
       },
       {
         chassis: `KIA-GC-${year}-004`,
@@ -532,7 +535,7 @@ export class SeedService {
         color: 'PLATA METEORICO',
         sede: SedeEnum.GRANADAS_CENTENOS,
         status: VehicleStatus.ENTREGADO,
-        originConcessionaire: 'KIA GRANADAS CENTENOS',
+        originConcessionaire: 'KMOTOR',
       },
     ];
 
