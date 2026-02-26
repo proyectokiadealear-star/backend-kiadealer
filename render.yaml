@@ -1,0 +1,24 @@
+services:
+  - type: web
+    name: kia-dealer-backend
+    runtime: node
+    region: oregon
+    plan: free
+    buildCommand: yarn install && yarn build
+    startCommand: yarn start:prod
+    healthCheckPath: /
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: "3000"
+      - key: FIREBASE_PROJECT_ID
+        sync: false
+      - key: FIREBASE_CLIENT_EMAIL
+        sync: false
+      - key: FIREBASE_PRIVATE_KEY
+        sync: false
+      - key: FIREBASE_STORAGE_BUCKET
+        sync: false
+      - key: CORS_ORIGIN
+        sync: false
