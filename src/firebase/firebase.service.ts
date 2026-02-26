@@ -59,27 +59,25 @@ export class FirebaseService implements OnModuleInit {
   }
 
   /**
-   * Retorna la URL de descarga permanente del archivo usando el download token
-   * embebido en los metadatos.  NO requiere el rol IAM "Token Creator".
-   * Si por alguna razón el token no existe (archivo subido antes de esta versión),
-   * genera una URL firmada como fallback.
+   * Retorna la URL de descarga permanente del archivo.
+   * Usa el firebaseStorageDownloadTokens embebido en los metadatos.
+   * Si el token no existe (archivo subido en versión anterior), lo escribe
+   * ahora en los metadatos — NO requiere el rol IAM "Token Creator".
+   * Nunca llama a file.getSignedUrl() para evitar el error de permisos IAM.
    */
   async getSignedUrl(storagePath: string): Promise<string> {
     const file = this.bucket.file(storagePath);
     const [metadata] = await file.getMetadata();
-    const token = metadata.metadata?.firebaseStorageDownloadTokens as string | undefined;
+    let token = metadata.metadata?.firebaseStorageDownloadTokens as string | undefined;
 
-    if (token) {
-      const encoded = encodeURIComponent(storagePath);
-      return `https://firebasestorage.googleapis.com/v0/b/${this.bucket.name}/o/${encoded}?alt=media&token=${token}`;
+    if (!token) {
+      // Archivo legacy — le asignamos un token ahora, sin IAM
+      token = uuidv4();
+      await file.setMetadata({ metadata: { firebaseStorageDownloadTokens: token } });
     }
 
-    // Fallback (requiere Token Creator IAM) — solo para archivos legacy
-    const [url] = await file.getSignedUrl({
-      action: 'read',
-      expires: Date.now() + 365 * 24 * 60 * 60 * 1000, // 1 año
-    });
-    return url;
+    const encoded = encodeURIComponent(storagePath);
+    return `https://firebasestorage.googleapis.com/v0/b/${this.bucket.name}/o/${encoded}?alt=media&token=${token}`;
   }
 
   /**
