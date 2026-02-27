@@ -21,7 +21,7 @@ export class DocumentationService {
     private readonly firebase: FirebaseService,
     private readonly vehiclesService: VehiclesService,
     private readonly notificationsService: NotificationsService,
-  ) {}
+  ) { }
 
   private get db() {
     return this.firebase.firestore();
@@ -46,7 +46,8 @@ export class DocumentationService {
       );
     }
 
-    const isPending = dto.saveAsPending === true;
+    // En documentation.service.ts
+    const isPending = String(dto.saveAsPending) === 'true';
 
     // DEBUG TEMPORAL — confirmar valor real de saveAsPending en producción
     this.logger.log(`[create] saveAsPending raw="${dto.saveAsPending}" (type=${typeof dto.saveAsPending}) → isPending=${isPending}`);
@@ -225,15 +226,15 @@ export class DocumentationService {
     await Promise.all([
       files?.vehicleInvoice
         ? uploadAndSign(files.vehicleInvoice, `${basePath}/vehicle-invoice.pdf`)
-            .then((url) => { updates['vehicleInvoiceUrl'] = url; updatedFiles.push('Factura vehículo'); })
+          .then((url) => { updates['vehicleInvoiceUrl'] = url; updatedFiles.push('Factura vehículo'); })
         : Promise.resolve(),
       files?.giftEmail
         ? uploadAndSign(files.giftEmail, `${basePath}/gift-email.pdf`)
-            .then((url) => { updates['giftEmailUrl'] = url; updatedFiles.push('Email regalo'); })
+          .then((url) => { updates['giftEmailUrl'] = url; updatedFiles.push('Email regalo'); })
         : Promise.resolve(),
       files?.accessoryInvoice
         ? uploadAndSign(files.accessoryInvoice, `${basePath}/accessory-invoice.pdf`)
-            .then((url) => { updates['accessoryInvoiceUrl'] = url; updatedFiles.push('Factura accesorios'); })
+          .then((url) => { updates['accessoryInvoiceUrl'] = url; updatedFiles.push('Factura accesorios'); })
         : Promise.resolve(),
     ]);
 
@@ -321,7 +322,7 @@ export class DocumentationService {
     const basePath = `vehicles/${vehicleId}/docs`;
     const deleteJobs: Promise<void>[] = [];
     if (data['vehicleInvoiceUrl']) deleteJobs.push(this.firebase.deleteFile(`${basePath}/vehicle-invoice.pdf`));
-    if (data['giftEmailUrl'])      deleteJobs.push(this.firebase.deleteFile(`${basePath}/gift-email.pdf`));
+    if (data['giftEmailUrl']) deleteJobs.push(this.firebase.deleteFile(`${basePath}/gift-email.pdf`));
     if (data['accessoryInvoiceUrl']) deleteJobs.push(this.firebase.deleteFile(`${basePath}/accessory-invoice.pdf`));
     await Promise.all(deleteJobs);
 
@@ -364,9 +365,9 @@ export class DocumentationService {
     const vehicle = await this.vehiclesService.assertExists(vehicleId);
 
     const fileMap: Record<string, { storagePath: string; urlField: string; label: string }> = {
-      vehicleInvoice:  { storagePath: `vehicles/${vehicleId}/docs/vehicle-invoice.pdf`,  urlField: 'vehicleInvoiceUrl',  label: 'Factura vehículo' },
-      giftEmail:       { storagePath: `vehicles/${vehicleId}/docs/gift-email.pdf`,        urlField: 'giftEmailUrl',       label: 'Email regalo' },
-      accessoryInvoice:{ storagePath: `vehicles/${vehicleId}/docs/accessory-invoice.pdf`, urlField: 'accessoryInvoiceUrl',label: 'Factura accesorios' },
+      vehicleInvoice: { storagePath: `vehicles/${vehicleId}/docs/vehicle-invoice.pdf`, urlField: 'vehicleInvoiceUrl', label: 'Factura vehículo' },
+      giftEmail: { storagePath: `vehicles/${vehicleId}/docs/gift-email.pdf`, urlField: 'giftEmailUrl', label: 'Email regalo' },
+      accessoryInvoice: { storagePath: `vehicles/${vehicleId}/docs/accessory-invoice.pdf`, urlField: 'accessoryInvoiceUrl', label: 'Factura accesorios' },
     };
 
     const target = fileMap[fileType];

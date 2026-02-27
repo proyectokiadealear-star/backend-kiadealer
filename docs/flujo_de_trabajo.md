@@ -103,8 +103,8 @@
 - Entrada en `statusHistory`
 
 **Notificaciones disparadas:**
-- Si `mileage > 10`: notificación `KILOMETRAJE_ALTO` → JEFE_TALLER
-- Si `imprints === 'SIN_IMPRONTAS'`: notificación `SIN_IMPRONTAS` → JEFE_TALLER
+- Si `mileage > 10`: notificación `KILOMETRAJE_ALTO` → JEFE_TALLER, LIDER_TECNICO
+- Si `imprints === 'SIN_IMPRONTAS'`: notificación `SIN_IMPRONTAS` → JEFE_TALLER, LIDER_TECNICO, DOCUMENTACION 
 - Notificación `ESTADO_CAMBIADO` → DOCUMENTACION de la sede (vehículo listo para documentar)
 
 ---
@@ -121,6 +121,7 @@
 - Cédula
 - Teléfono
 - Tipo de matrícula: NORMAL / RAPIDA / EXCLUSIVA
+- Metodo de pago: CONTADO / CREDITO 
 
 **Documentos a cargar (PDFs → Firebase Storage):**
 - Factura del vehículo
@@ -150,9 +151,10 @@
 - Si todos los campos requeridos están completos → `DOCUMENTADO`
 - Si guarda con campos incompletos → `DOCUMENTACION_PENDIENTE` (modo standby)
 - `DOCUMENTACION_PENDIENTE` **bloquea** la generación de OT
-
+ - Sí registra entrada en `statusHistory`
 **Notificaciones disparadas:**
 - `ESTADO_CAMBIADO` → ASESOR/LIDER_TECNICO de la sede (vehículo listo para accesorizar)
+- `DOCUMENTACION_PENDIENTE` → JEFE_TALLER
 
 ---
 
@@ -163,7 +165,7 @@
 
 - No cambia el estado del vehículo
 - Sí registra entrada en `statusHistory` con nota "Cambio de sede"
-- Notificación al JEFE_TALLER: `CAMBIO_SEDE`
+- Notificación al JEFE_TALLER, y a los roles correpsondientes a la sede que llega  DOCUMENTACION, ASESOR, LIDER_TECNICO,: `CAMBIO_SEDE`
 
 ---
 
@@ -179,7 +181,7 @@
 - El vehículo deja de aparecer en el inventario activo
 - Queda en historial para consulta con estado `CEDIDO`
 - Notificación al JEFE_TALLER: `CEDIDO`
-
+Sí registra entrada en `statusHistory`
 ---
 
 ## FASE 3 — Accesorización
@@ -192,7 +194,7 @@
 
 **El sistema automáticamente:**
 - Extrae los accesorios clasificados como VENDIDO u OBSEQUIADO
-- Genera un número de orden único (`ORD-{sede}-{timestamp}`)
+- Permite al rol de ASESOR, LIDER_TECNICO ingresar el numero de la orden de trabajox
 - Ejecuta el algoritmo de predicción de accesorios adicionales
 - Muestra predicciones al asesor en la pantalla de OT
 
@@ -216,7 +218,9 @@ Salida:
 ```
 
 **Notificaciones disparadas:**
-- `OT_GENERADA` → LIDER_TECNICO de la sede
+- `OT_GENERADA` → LIDER_TECNICO de la sede, JEFE_TALLER
+- poner en el statushistory
+- 
 
 ---
 
@@ -227,7 +231,7 @@ Salida:
 **Estado resultante:** `ASIGNADO`
 
 - El Líder filtra personal de taller activo (`active: true`) de su sede
-- Selecciona uno o más técnicos
+- Selecciona uno  técnico
 - El sistema asigna el `uid` del técnico a la OT
 
 **Notificaciones disparadas:**
@@ -244,9 +248,11 @@ Salida:
 - El técnico marca cada accesorio del checklist como instalado
 - Al marcar el último accesorio → estado automático a `INSTALACION_COMPLETA`
 - Registro de `installedBy` (uid) e `installationCompleteDate`
+- ESTO SE REGISTRA EN STATUS HISTORY
 
 **Notificaciones disparadas:**
-- `INSTALACION_LISTA` → LIDER_TECNICO de la sede
+- `INSTALACION_LISTA` → LIDER_TECNICO de la sede, JEFE_TALLER
+- 
 
 ---
 
@@ -258,9 +264,10 @@ Salida:
 
 - El Líder valida visualmente la instalación y aprueba
 - El sistema actualiza el estado
-
+- ESTO VA AL statushistory 
 **Notificaciones disparadas:**
-- `LISTO_ENTREGA` → ASESOR de la sede (agendar entrega)
+- `LISTO_ENTREGA` → ASESOR, JefeTALLER de la sede (agendar entrega)
+- 
 
 ---
 
@@ -271,7 +278,7 @@ Salida:
 **Estado resultante:** `REAPERTURA_OT`
 
 **Datos requeridos:**
-- Accesorios nuevos a agregar (salen como VENDIDO por defecto)
+- selccionar uno a  mas accesorios a agregar(listadado de los accesorios que hay en documentación)
 - Motivo de la reapertura (texto obligatorio)
 
 **Flujo:**
@@ -280,6 +287,8 @@ Salida:
 3. El Líder Técnico reasigna (o mantiene) al técnico
 4. El técnico completa el nuevo checklist
 5. El flujo continúa normalmente hacia `LISTO_PARA_ENTREGA`
+   
+va tambien para el statusHistory
 
 **Notificaciones disparadas:**
 - `REAPERTURA` → JEFE_TALLER (alerta de retroceso en flujo)
@@ -298,7 +307,7 @@ Salida:
 **Datos requeridos:**
 - Fecha de entrega
 - Hora de entrega
-- Asesor encargado de la entrega (uid + nombre)
+- Asesor encargado de la entrega (uid + nombre), por lo general siempre es asciado al asesor o lider que este ingresado en el auth 
 
 **Notificaciones disparadas:**
 - `AGENDADO` → ASESOR asignado como entregador
