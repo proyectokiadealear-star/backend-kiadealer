@@ -48,6 +48,9 @@ export class DocumentationService {
 
     const isPending = dto.saveAsPending === true;
 
+    // DEBUG TEMPORAL — confirmar valor real de saveAsPending en producción
+    this.logger.log(`[create] saveAsPending raw="${dto.saveAsPending}" (type=${typeof dto.saveAsPending}) → isPending=${isPending}`);
+
     // vehicleInvoice es obligatorio salvo que se guarde como pendiente
     if (!isPending && !files?.vehicleInvoice) {
       throw new BadRequestException('La factura del vehículo (vehicleInvoice) es obligatoria para completar la documentación.');
