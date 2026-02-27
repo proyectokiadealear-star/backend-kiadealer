@@ -51,7 +51,14 @@ export class ServiceOrdersService {
     }
 
     // Obtener accesorios vendidos/obsequiados de documentación
-    const docSnap = await this.db.collection('documentations').doc(dto.vehicleId).get();
+    let docSnap: FirebaseFirestore.DocumentSnapshot;
+    try {
+      docSnap = await this.db.collection('documentations').doc(dto.vehicleId).get();
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      this.logger.error(`Error leyendo documentación de Firestore para vehículo ${dto.vehicleId}: ${msg}`);
+      throw err;
+    }
     if (!docSnap.exists) throw new BadRequestException('El vehículo no tiene documentación registrada');
 
     const docData = docSnap.data()!;
@@ -140,8 +147,15 @@ export class ServiceOrdersService {
       query = query.where('vehicleId', '==', filters.vehicleId);
     }
 
-    const snapshot = await query.orderBy('createdAt', 'desc').get();
-    return snapshot.docs.map((d) => d.data());
+    // orderBy en cliente para evitar requerir índices compuestos en Firestore
+    const snapshot = await query.get();
+    return snapshot.docs
+      .map((d) => d.data())
+      .sort((a, b) => {
+        const aTs = a['createdAt']?._seconds ?? 0;
+        const bTs = b['createdAt']?._seconds ?? 0;
+        return bTs - aTs;
+      });
   }
 
   async findOne(id: string) {
@@ -348,15 +362,17 @@ export class ServiceOrdersService {
     }
 
     // Obtener la OT actual
+    // Sin orderBy para evitar índice compuesto — ordenamos en memoria
     const currentOrderSnap = await this.db
       .collection('serviceOrders')
       .where('vehicleId', '==', dto.vehicleId)
       .where('isReopening', '==', false)
-      .orderBy('createdAt', 'desc')
-      .limit(1)
       .get();
 
-    const previousOrderId = currentOrderSnap.empty ? null : currentOrderSnap.docs[0].id;
+    const sortedOrders = currentOrderSnap.docs
+      .map((d) => d.data())
+      .sort((a, b) => (b['createdAt']?._seconds ?? 0) - (a['createdAt']?._seconds ?? 0));
+    const previousOrderId = sortedOrders.length > 0 ? sortedOrders[0]['id'] : null;
 
     const orderId = uuidv4();
     const orderNumber = this.generateOrderNumber(vehicle['sede'] as string);
