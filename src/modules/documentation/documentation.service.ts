@@ -2,6 +2,7 @@ import {
   Injectable,
   BadRequestException,
   NotFoundException,
+  InternalServerErrorException,
   Logger,
 } from '@nestjs/common';
 import { FirebaseService } from '../../firebase/firebase.service';
@@ -45,9 +46,22 @@ export class DocumentationService {
       );
     }
 
+    const isPending = dto.saveAsPending === true;
+
+    // vehicleInvoice es obligatorio salvo que se guarde como pendiente
+    if (!isPending && !files?.vehicleInvoice) {
+      throw new BadRequestException('La factura del vehículo (vehicleInvoice) es obligatoria para completar la documentación.');
+    }
+
     const uploadAndSign = async (file: Express.Multer.File, path: string) => {
-      await this.firebase.uploadBuffer(file.buffer, path, file.mimetype);
-      return this.firebase.getSignedUrl(path);
+      try {
+        await this.firebase.uploadBuffer(file.buffer, path, file.mimetype);
+        return this.firebase.getSignedUrl(path);
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
+        this.logger.error(`Error subiendo archivo a Storage [${path}]: ${msg}`);
+        throw new InternalServerErrorException(`Error al subir archivo a Storage: ${msg}`);
+      }
     };
 
     const basePath = `vehicles/${vehicleId}/docs`;
@@ -64,7 +78,6 @@ export class DocumentationService {
     ]);
 
     const now = this.firebase.serverTimestamp();
-    const isPending = dto.saveAsPending === true;
     const newStatus = isPending
       ? VehicleStatus.DOCUMENTACION_PENDIENTE
       : VehicleStatus.DOCUMENTADO;
