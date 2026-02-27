@@ -62,7 +62,8 @@ export class ServiceOrdersService {
     if (!docSnap.exists) throw new BadRequestException('El vehículo no tiene documentación registrada');
 
     const docData = docSnap.data()!;
-    const accessories: Array<{ key: string; classification: string }> = docData['accessories'] ?? [];
+    const rawAccessories = docData['accessories'];
+    const accessories: Array<{ key: string; classification: string }> = Array.isArray(rawAccessories) ? rawAccessories : [];
     const orderAccessories = accessories.filter(
       (a) =>
         a.classification === AccessoryClassification.VENDIDO ||
@@ -436,7 +437,8 @@ export class ServiceOrdersService {
     const docSnap = await this.db.collection('documentations').doc(vehicleId).get();
     if (!docSnap.exists) return [];
 
-    const accessories = docSnap.data()!['accessories'] ?? [];
+    const raw = docSnap.data()!['accessories'];
+    const accessories: Array<{ key: string; classification: string }> = Array.isArray(raw) ? raw : [];
     return this.runPrediction(accessories, vehicleId);
   }
 
@@ -461,7 +463,11 @@ export class ServiceOrdersService {
     const allDocsSnap = await this.db.collection('documentations').get();
     const allDocs = allDocsSnap.docs
       .filter((d) => d.id !== vehicleId)
-      .map((d) => d.data()!['accessories'] as Array<{ key: string; classification: string }> ?? []);
+      .map((d) => {
+        const raw = d.data()?.['accessories'];
+        return Array.isArray(raw) ? (raw as Array<{ key: string; classification: string }>) : [];
+      })
+      .filter((acc) => acc.length > 0); // descartar docs sin accesorios válidos
 
     // Encontrar vehículos con al menos las mismas keys vendidas
     const similar = allDocs.filter((acc) => {
