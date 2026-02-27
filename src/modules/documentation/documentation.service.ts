@@ -109,6 +109,9 @@ export class DocumentationService {
     await this.db.collection('documentations').doc(vehicleId).set(docData);
 
     await this.vehiclesService.changeStatus(vehicleId, newStatus, user, {
+      notes: isPending
+        ? `Documentación guardada como pendiente por ${user.displayName ?? user.email} — Cliente: ${dto.clientName} (${dto.clientId})`
+        : `Vehículo documentado por ${user.displayName ?? user.email} — Cliente: ${dto.clientName} (${dto.clientId}), Pago: ${dto.paymentMethod}`,
       extraFields: {
         documentationDate: isPending ? null : now,
         documentedBy: user.uid,

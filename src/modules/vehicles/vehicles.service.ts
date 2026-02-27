@@ -101,7 +101,14 @@ export class VehiclesService {
     await this.db.collection('vehicles').doc(vehicleId).set(vehicleData);
 
     // 5. Registrar en statusHistory
-    await this.addStatusHistory(vehicleId, null, VehicleStatus.RECEPCIONADO, user, sede);
+    await this.addStatusHistory(
+      vehicleId,
+      null,
+      VehicleStatus.RECEPCIONADO,
+      user,
+      sede,
+      `Vehículo recepcionado por ${user.displayName ?? user.email} — Chasis: ${dto.chassis}, Modelo: ${dto.model}, Año: ${dto.year}`,
+    );
 
     this.logger.log(`Vehículo creado: ${vehicleId} (${dto.chassis}) por ${user.uid}`);
 
