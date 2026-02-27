@@ -86,8 +86,11 @@ export class AppointmentsService {
       query = query.where('sede', '==', user.sede);
     }
 
-    const snapshot = await query.orderBy('scheduledDate', 'asc').get();
-    let docs = snapshot.docs.map((d) => d.data());
+    // Sin orderBy en Firestore para evitar índices compuestos — ordenar en memoria
+    const snapshot = await query.get();
+    let docs = snapshot.docs
+      .map((d) => d.data())
+      .sort((a, b) => String(a['scheduledDate'] ?? '').localeCompare(String(b['scheduledDate'] ?? '')));
 
     if (dateFrom) docs = docs.filter((d) => d['scheduledDate'] >= dateFrom);
     if (dateTo) docs = docs.filter((d) => d['scheduledDate'] <= dateTo);

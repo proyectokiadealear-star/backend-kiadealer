@@ -67,12 +67,17 @@ export class UsersService {
     if (filters?.sede) query = query.where('sede', '==', filters.sede);
     if (filters?.active !== undefined) query = query.where('active', '==', filters.active);
 
-    const snapshot = await query.orderBy('displayName', 'asc').get();
-    return snapshot.docs.map((d) => {
-      const data = d.data();
-      delete data['fcmTokens']; // No exponer tokens
-      return data;
-    });
+    // Sin orderBy en Firestore para evitar índices compuestos — ordenar en memoria
+    const snapshot = await query.get();
+    return snapshot.docs
+      .map((d) => {
+        const data = d.data();
+        delete data['fcmTokens']; // No exponer tokens
+        return data;
+      })
+      .sort((a, b) =>
+        String(a['displayName'] ?? '').localeCompare(String(b['displayName'] ?? '')),
+      );
   }
 
   async findOne(uid: string) {

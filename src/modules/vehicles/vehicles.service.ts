@@ -149,8 +149,11 @@ export class VehiclesService {
       ref = ref.where('status', 'in', activeStatuses);
     }
 
-    const snapshot = await ref.orderBy('createdAt', 'desc').get();
-    let vehicles = snapshot.docs.map((d) => d.data());
+    // Sin orderBy en Firestore para evitar índices compuestos — ordenar en memoria
+    const snapshot = await ref.get();
+    let vehicles = snapshot.docs
+      .map((d) => d.data())
+      .sort((a, b) => (b['createdAt']?._seconds ?? 0) - (a['createdAt']?._seconds ?? 0));
 
     // Filtros en memoria (por limitaciones de Firestore)
     if (query.chassis) {

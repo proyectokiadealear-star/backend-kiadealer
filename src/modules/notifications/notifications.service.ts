@@ -90,16 +90,18 @@ export class NotificationsService {
   async getNotifications(uid: string, userRole: RoleEnum, onlyUnread: boolean, limit: number) {
     let query: FirebaseFirestore.Query = this.db
       .collection('notifications')
-      .where('targetRole', '==', userRole)
-      .orderBy('createdAt', 'desc')
-      .limit(limit);
+      .where('targetRole', '==', userRole);
 
     if (onlyUnread) {
       query = query.where('read', '==', false);
     }
 
+    // Sin orderBy en Firestore para evitar índices compuestos — ordenar en memoria
     const snapshot = await query.get();
-    return snapshot.docs.map((d) => d.data());
+    return snapshot.docs
+      .map((d) => d.data())
+      .sort((a, b) => (b['createdAt']?._seconds ?? 0) - (a['createdAt']?._seconds ?? 0))
+      .slice(0, limit);
   }
 
   async markAsRead(notifId: string) {
