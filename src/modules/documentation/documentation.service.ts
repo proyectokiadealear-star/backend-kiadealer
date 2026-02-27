@@ -93,7 +93,7 @@ export class DocumentationService {
       giftEmailUrl,
       accessoryInvoiceUrl,
       accessories: Array.isArray(dto.accessories)
-        ? dto.accessories.map(item => ({ ...item }))
+        ? JSON.parse(JSON.stringify(dto.accessories))
         : dto.accessories,
       documentationStatus: isPending ? 'PENDIENTE' : 'COMPLETO',
       documentedAt: isPending ? null : now,
@@ -188,8 +188,7 @@ export class DocumentationService {
 
     const vehicle = await this.vehiclesService.assertExists(vehicleId);
 
-    // saveAsPending es un flag de control — no se persiste directamente en el doc
-    const { saveAsPending, ...restDto } = dto;
+    const { saveAsPending, accessories, ...restDto } = dto;
     const isCompleting =
       saveAsPending === false &&
       vehicle['status'] === VehicleStatus.DOCUMENTACION_PENDIENTE;
@@ -197,6 +196,9 @@ export class DocumentationService {
     const now = this.firebase.serverTimestamp();
     const updates: Record<string, unknown> = {
       ...restDto,
+      ...(accessories !== undefined && {
+        accessories: JSON.parse(JSON.stringify(accessories)),
+      }),
       updatedAt: now,
     };
 
