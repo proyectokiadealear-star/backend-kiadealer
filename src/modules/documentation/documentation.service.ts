@@ -58,10 +58,6 @@ export class DocumentationService {
         await this.firebase.uploadBuffer(file.buffer, path, file.mimetype);
         return this.firebase.getSignedUrl(path);
       } catch (err: unknown) {
-        // DEBUG TEMPORAL — ver en Render Logs el objeto completo del error de Google/Storage
-        console.log('=== DETALLE DEL ERROR STORAGE ===');
-        console.log(JSON.stringify(err, Object.getOwnPropertyNames(err as object), 2));
-        console.log('=================================');
         const msg = err instanceof Error ? err.message : String(err);
         this.logger.error(`Error subiendo archivo a Storage [${path}]: ${msg}`);
         throw new InternalServerErrorException(`Error al subir archivo a Storage: ${msg}`);
@@ -96,7 +92,9 @@ export class DocumentationService {
       vehicleInvoiceUrl,
       giftEmailUrl,
       accessoryInvoiceUrl,
-      accessories: dto.accessories,
+      accessories: Array.isArray(dto.accessories)
+        ? dto.accessories.map(item => ({ ...item }))
+        : dto.accessories,
       documentationStatus: isPending ? 'PENDIENTE' : 'COMPLETO',
       documentedAt: isPending ? null : now,
       documentedBy: user.uid,
