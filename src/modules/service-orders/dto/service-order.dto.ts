@@ -23,7 +23,7 @@ export class AssignTechnicianDto {
   @ApiProperty({ description: 'UID del técnico asignado (obtenido de GET /users?role=PERSONAL_TALLER)', example: 'uid-tecnico-xyz' })
   @IsString()
   @IsNotEmpty()
-  technicianId: string;
+  technicianUid: string;
 
   @ApiProperty({ description: 'Nombre del técnico para visualización', example: 'Carlos Ramírez' })
   @IsString()

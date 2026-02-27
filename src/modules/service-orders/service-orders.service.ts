@@ -187,10 +187,10 @@ export class ServiceOrdersService {
 
     const previousTechnicianId: string | null = order!['assignedTechnicianId'] ?? null;
     const previousTechnicianName: string | null = order!['assignedTechnicianName'] ?? null;
-    const isReassignment = !!previousTechnicianId && previousTechnicianId !== dto.technicianId;
+    const isReassignment = !!previousTechnicianId && previousTechnicianId !== dto.technicianUid;
 
     await this.db.collection('serviceOrders').doc(orderId).update({
-      assignedTechnicianId: dto.technicianId,
+      assignedTechnicianId: dto.technicianUid,
       assignedTechnicianName: dto.technicianName,
       assignedAt: this.firebase.serverTimestamp(),
       status: 'ASIGNADA',
@@ -203,7 +203,7 @@ export class ServiceOrdersService {
 
     await this.vehiclesService.changeStatus(order!['vehicleId'], VehicleStatus.ASIGNADO, user, {
       notes: historyNote,
-      extraFields: { assignedTechnicianId: dto.technicianId, assignedTechnicianName: dto.technicianName },
+      extraFields: { assignedTechnicianId: dto.technicianUid, assignedTechnicianName: dto.technicianName },
     });
 
     const notifBody = `Se te asignó el vehículo ${vehicle['chassis']} para instalación`;
@@ -216,7 +216,7 @@ export class ServiceOrdersService {
         body: notifBody,
         vehicleId: order!['vehicleId'],
         chassis: vehicle['chassis'] as string,
-        data: { technicianId: dto.technicianId },
+        data: { technicianId: dto.technicianUid },
       }),
     ];
 
@@ -238,8 +238,8 @@ export class ServiceOrdersService {
 
     await Promise.all(notifJobs);
 
-    this.logger.log(`${isReassignment ? 'Reasignación' : 'Asignación'} de técnico en OT ${orderId}: ${dto.technicianId}`);
-    return { orderId, assignedTechnicianId: dto.technicianId, isReassignment };
+    this.logger.log(`${isReassignment ? 'Reasignación' : 'Asignación'} de técnico en OT ${orderId}: ${dto.technicianUid}`);
+    return { orderId, assignedTechnicianId: dto.technicianUid, isReassignment };
   }
 
   async updateChecklist(orderId: string, dto: UpdateChecklistDto, user: AuthenticatedUser) {
