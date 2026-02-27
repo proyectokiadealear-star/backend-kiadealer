@@ -115,9 +115,11 @@ export class CreateDocumentationDto {
   @IsOptional()
   @IsBoolean()
   @Transform(({ value }) => {
-    if (value === 'true') return true;
-    if (value === 'false') return false;
-    return value;
+    // Manejo explícito para evitar que enableImplicitConversion convierta "false" → true
+    if (value === true  || value === 'true')  return true;
+    if (value === false || value === 'false') return false;
+    return false; // default: NO pendiente
   })
+  @Type(() => String) // evita que class-transformer haga Boolean("false") = true antes del @Transform
   saveAsPending?: boolean;
 }

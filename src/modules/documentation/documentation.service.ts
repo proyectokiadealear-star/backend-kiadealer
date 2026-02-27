@@ -50,7 +50,7 @@ export class DocumentationService {
     const isPending = String(dto.saveAsPending) === 'true';
 
     // DEBUG TEMPORAL — confirmar valor real de saveAsPending en producción
-    this.logger.log(`[create] saveAsPending raw="${dto.saveAsPending}" (type=${typeof dto.saveAsPending}) → isPending=${isPending}`);
+    this.logger.log(`[create] saveAsPending raw="${dto.saveAsPending}" (type=${typeof dto.saveAsPending}) → isPending=${isPending} → newStatus=${isPending ? 'DOCUMENTACION_PENDIENTE' : 'DOCUMENTADO'}`);
 
     // vehicleInvoice es obligatorio salvo que se guarde como pendiente
     if (!isPending && !files?.vehicleInvoice) {
