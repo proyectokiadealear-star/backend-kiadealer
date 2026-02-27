@@ -155,7 +155,9 @@ export class ServiceOrdersService {
       });
 
     if (filters?.status) {
-      results = results.filter((d) => d['status'] === filters.status);
+      // Soporta múltiples status separados por coma: ?status=ASIGNADA,EN_INSTALACION
+      const statusList = filters.status.split(',').map((s) => s.trim()).filter(Boolean);
+      results = results.filter((d) => statusList.includes(d['status'] as string));
     }
     if (filters?.vehicleId) {
       results = results.filter((d) => d['vehicleId'] === filters.vehicleId);

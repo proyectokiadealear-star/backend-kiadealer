@@ -87,7 +87,7 @@ export class ServiceOrdersController {
       'PERSONAL_TALLER solo verá OTs asignadas a su uid. **Roles:** todos',
   })
   @ApiQuery({ name: 'sede', enum: SedeEnum, required: false, description: 'Filtrar por sede (solo JEFE_TALLER)' })
-  @ApiQuery({ name: 'status', required: false, description: 'Filtrar por status de OT (GENERADA, ASIGNADA, EN_INSTALACION, INSTALACION_COMPLETA, LISTO_ENTREGA, REAPERTURA)' })
+  @ApiQuery({ name: 'status', required: false, description: 'Filtrar por status. Acepta uno o varios separados por coma: GENERADA,ASIGNADA,EN_INSTALACION,INSTALACION_COMPLETA,LISTO_PARA_ENTREGA,REAPERTURA_OT' })
   @ApiQuery({ name: 'vehicleId', required: false, description: 'Filtrar por vehículo' })
   @ApiResponse({ status: 200, description: 'Lista de órdenes de trabajo' })
   @Roles(RoleEnum.ASESOR, RoleEnum.LIDER_TECNICO, RoleEnum.PERSONAL_TALLER, RoleEnum.JEFE_TALLER, RoleEnum.SOPORTE)
