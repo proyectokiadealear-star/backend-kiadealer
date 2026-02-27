@@ -135,28 +135,33 @@ export class ServiceOrdersService {
   async findAll(user: AuthenticatedUser, filters?: { sede?: string; status?: string; vehicleId?: string }) {
     let query: FirebaseFirestore.Query = this.db.collection('serviceOrders');
 
-    if (user.role !== RoleEnum.JEFE_TALLER) {
+    // PERSONAL_TALLER solo ve sus OTs asignadas
+    if (user.role === RoleEnum.PERSONAL_TALLER) {
+      query = query.where('assignedTechnicianId', '==', user.uid);
+    } else if (user.role !== RoleEnum.JEFE_TALLER) {
       query = query.where('sede', '==', user.sede);
     } else if (filters?.sede) {
       query = query.where('sede', '==', filters.sede);
     }
 
-    if (filters?.status) {
-      query = query.where('status', '==', filters.status);
-    }
-    if (filters?.vehicleId) {
-      query = query.where('vehicleId', '==', filters.vehicleId);
-    }
-
-    // orderBy en cliente para evitar requerir índices compuestos en Firestore
+    // Sin where adicionales para evitar índices compuestos — filtrar en memoria
     const snapshot = await query.get();
-    return snapshot.docs
+    let results = snapshot.docs
       .map((d) => d.data())
       .sort((a, b) => {
         const aTs = a['createdAt']?._seconds ?? 0;
         const bTs = b['createdAt']?._seconds ?? 0;
         return bTs - aTs;
       });
+
+    if (filters?.status) {
+      results = results.filter((d) => d['status'] === filters.status);
+    }
+    if (filters?.vehicleId) {
+      results = results.filter((d) => d['vehicleId'] === filters.vehicleId);
+    }
+
+    return results;
   }
 
   async findOne(id: string) {
