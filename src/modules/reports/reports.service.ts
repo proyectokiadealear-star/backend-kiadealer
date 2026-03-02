@@ -109,9 +109,32 @@ export class ReportsService {
     const snapshot = await this.db.collection('vehicles').get();
     const all = snapshot.docs.map((d) => d.data());
 
+    // Soporta DD/MM/YYYY y YYYY-MM-DD
+    const parseDate = (raw?: string): Date | null => {
+      if (!raw) return null;
+      if (raw.includes('/')) {
+        const [d, m, y] = raw.split('/');
+        return new Date(`${y}-${m.padStart(2, '0')}-${d.padStart(2, '0')}T00:00:00.000Z`);
+      }
+      return new Date(`${raw}T00:00:00.000Z`);
+    };
+
+    const fromDate = parseDate(filters?.dateFrom);
+    const toDate = filters?.dateTo
+      ? new Date(`${parseDate(filters.dateTo)!.toISOString().slice(0, 10)}T23:59:59.999Z`)
+      : null;
+
     const filtered = all.filter((v) => {
       if (user.role !== RoleEnum.JEFE_TALLER && v['sede'] !== user.sede) return false;
       if (filters?.sede && v['sede'] !== filters.sede) return false;
+      // Filtro por receptionDate
+      if (fromDate || toDate) {
+        const rd = v['receptionDate'];
+        if (!rd) return false;
+        const vDate = rd._seconds ? new Date(rd._seconds * 1000) : new Date(rd);
+        if (fromDate && vDate < fromDate) return false;
+        if (toDate && vDate > toDate) return false;
+      }
       return true;
     });
 
@@ -125,12 +148,99 @@ export class ReportsService {
       byModel[v['model']] = (byModel[v['model']] ?? 0) + 1;
     }
 
+    const vehicleIds = filtered.map((v) => v['id'] as string).filter(Boolean);
+
+    // ── BLOQUE 1: accessories ──────────────────────────────────────────
+    // Lectura directa por vehicleId en 'documentations' → sin índice compuesto
+    const docSnaps = await Promise.all(
+      vehicleIds.map((id) => this.db.collection('documentations').doc(id).get()),
+    );
+
+    const byKey: Record<string, Record<string, number>> = {};
+    let totalVendido = 0;
+    let totalObsequiado = 0;
+
+    for (const snap of docSnaps) {
+      if (!snap.exists) continue;
+      const accessories: Array<{ key: string; classification: string }> =
+        snap.data()!['accessories'] ?? [];
+      for (const acc of accessories) {
+        if (!byKey[acc.key]) byKey[acc.key] = { VENDIDO: 0, OBSEQUIADO: 0, NO_APLICA: 0 };
+        byKey[acc.key][acc.classification] = (byKey[acc.key][acc.classification] ?? 0) + 1;
+        if (acc.classification === 'VENDIDO') totalVendido++;
+        if (acc.classification === 'OBSEQUIADO') totalObsequiado++;
+      }
+    }
+
+    const topSold = Object.entries(byKey)
+      .map(([key, counts]) => ({ key, vendido: counts['VENDIDO'] ?? 0 }))
+      .sort((a, b) => b.vendido - a.vendido)
+      .slice(0, 5);
+
+    // ── BLOQUE 2: topAsesores ──────────────────────────────────────────
+    // Cuenta documentedBy (órdenes generadas) y deliveredBy (entregas)
+    const documentedByCount: Record<string, number> = {};
+    const deliveredByCount: Record<string, number> = {};
+
+    for (const v of filtered) {
+      const docBy = v['documentedBy'] as string | undefined;
+      const delBy = v['deliveredBy'] as string | undefined;
+      if (docBy) documentedByCount[docBy] = (documentedByCount[docBy] ?? 0) + 1;
+      if (delBy) deliveredByCount[delBy] = (deliveredByCount[delBy] ?? 0) + 1;
+    }
+
+    // Lectura directa por uid en 'users' → sin índice
+    const allUids = [
+      ...new Set([...Object.keys(documentedByCount), ...Object.keys(deliveredByCount)]),
+    ];
+
+    const userSnaps = await Promise.all(
+      allUids.map((uid) => this.db.collection('users').doc(uid).get()),
+    );
+
+    const userMap: Record<string, { name: string; sede: string }> = {};
+    for (const snap of userSnaps) {
+      if (!snap.exists) continue;
+      const d = snap.data()!;
+      userMap[snap.id] = { name: d['displayName'] ?? snap.id, sede: d['sede'] ?? '' };
+    }
+
+    const ordenesGeneradas = Object.entries(documentedByCount)
+      .map(([uid, ordenes]) => ({
+        uid,
+        name: userMap[uid]?.name ?? uid,
+        sede: userMap[uid]?.sede ?? '',
+        ordenes,
+      }))
+      .sort((a, b) => b.ordenes - a.ordenes)
+      .slice(0, 5);
+
+    const entregas = Object.entries(deliveredByCount)
+      .map(([uid, count]) => ({
+        uid,
+        name: userMap[uid]?.name ?? uid,
+        sede: userMap[uid]?.sede ?? '',
+        entregas: count,
+      }))
+      .sort((a, b) => b.entregas - a.entregas)
+      .slice(0, 5);
+
     return {
       total: filtered.length,
       byStatus,
       bySede,
       byModel,
-      vehiclesDelivered: byStatus['Entregado'] ?? 0,
+      vehiclesDelivered: byStatus['ENTREGADO'] ?? byStatus['Entregado'] ?? 0,
+      accessories: {
+        byKey,
+        topSold,
+        totalVendido,
+        totalObsequiado,
+      },
+      topAsesores: {
+        ordenesGeneradas,
+        entregas,
+      },
     };
   }
 
