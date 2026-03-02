@@ -79,6 +79,15 @@ export class CatalogsController {
   @Roles(RoleEnum.JEFE_TALLER, RoleEnum.DOCUMENTACION, RoleEnum.SOPORTE)
   createColor(@Body() dto: NameDto) { return this.svc.createColor(dto.name); }
 
+  @Patch('colors/:id')
+  @ApiOperation({ summary: 'Editar nombre de color', description: '**Roles:** JEFE_TALLER, DOCUMENTACION, SOPORTE' })
+  @ApiParam({ name: 'id', description: 'UUID del color' })
+  @ApiBody({ type: NameDto })
+  @ApiResponse({ status: 200, description: 'Color actualizado' })
+  @ApiResponse({ status: 404, description: 'Color no encontrado' })
+  @Roles(RoleEnum.JEFE_TALLER, RoleEnum.DOCUMENTACION, RoleEnum.SOPORTE)
+  updateColor(@Param('id') id: string, @Body() dto: NameDto) { return this.svc.updateColor(id, dto.name); }
+
   @Delete('colors/:id')
   @ApiOperation({ summary: 'Eliminar color', description: '**Roles:** JEFE_TALLER, SOPORTE' })
   @ApiParam({ name: 'id', description: 'UUID del color' })
@@ -99,6 +108,15 @@ export class CatalogsController {
   @ApiResponse({ status: 201, description: 'Modelo creado. Nombre almacenado en MAYUSCULAS.' })
   @Roles(RoleEnum.JEFE_TALLER, RoleEnum.SOPORTE)
   createModel(@Body() dto: NameDto) { return this.svc.createModel(dto.name); }
+
+  @Patch('models/:id')
+  @ApiOperation({ summary: 'Editar nombre de modelo', description: '**Roles:** JEFE_TALLER, SOPORTE' })
+  @ApiParam({ name: 'id', description: 'UUID del modelo' })
+  @ApiBody({ type: NameDto })
+  @ApiResponse({ status: 200, description: 'Modelo actualizado' })
+  @ApiResponse({ status: 404, description: 'Modelo no encontrado' })
+  @Roles(RoleEnum.JEFE_TALLER, RoleEnum.SOPORTE)
+  updateModel(@Param('id') id: string, @Body() dto: NameDto) { return this.svc.updateModel(id, dto.name); }
 
   @Delete('models/:id')
   @ApiOperation({ summary: 'Eliminar modelo', description: '**Roles:** JEFE_TALLER, SOPORTE' })
@@ -148,6 +166,23 @@ export class CatalogsController {
   @ApiResponse({ status: 201, description: 'Sede creada. Nombre y código almacenados en MAYUSCULAS.' })
   @Roles(RoleEnum.JEFE_TALLER, RoleEnum.SOPORTE)
   createSede(@Body() dto: NameCodeDto) { return this.svc.createSede(dto.name, dto.code); }
+
+  @Patch('sedes/:id')
+  @ApiOperation({ summary: 'Editar sede', description: '**Roles:** JEFE_TALLER, SOPORTE' })
+  @ApiParam({ name: 'id', description: 'UUID de la sede' })
+  @ApiBody({ type: NameCodeDto })
+  @ApiResponse({ status: 200, description: 'Sede actualizada' })
+  @ApiResponse({ status: 404, description: 'Sede no encontrada' })
+  @Roles(RoleEnum.JEFE_TALLER, RoleEnum.SOPORTE)
+  updateSede(@Param('id') id: string, @Body() dto: NameCodeDto) { return this.svc.updateSede(id, dto.name, dto.code); }
+
+  @Delete('sedes/:id')
+  @ApiOperation({ summary: 'Eliminar sede', description: '**Roles:** JEFE_TALLER, SOPORTE' })
+  @ApiParam({ name: 'id', description: 'UUID de la sede' })
+  @ApiResponse({ status: 200, description: 'Sede eliminada' })
+  @ApiResponse({ status: 404, description: 'Sede no encontrada' })
+  @Roles(RoleEnum.JEFE_TALLER, RoleEnum.SOPORTE)
+  deleteSede(@Param('id') id: string) { return this.svc.deleteSede(id); }
 
   // ── ACCESORIOS ───────────────────────────────────────
   @Get('accessories')

@@ -47,11 +47,13 @@ export class CatalogsService {
   // ── COLORES ───────────────────────────────────────────────────────
   getColors() { return this.getAll('colors'); }
   createColor(name: string) { return this.create('colors', { name }); }
+  updateColor(id: string, name: string) { return this.update('colors', id, { name }); }
   deleteColor(id: string) { return this.remove('colors', id); }
 
   // ── MODELOS ───────────────────────────────────────────────────────
   getModels() { return this.getAll('models'); }
   createModel(name: string) { return this.create('models', { name }); }
+  updateModel(id: string, name: string) { return this.update('models', id, { name }); }
   deleteModel(id: string) { return this.remove('models', id); }
 
   // ── CONCESIONARIOS ────────────────────────────────────────────────
@@ -63,6 +65,8 @@ export class CatalogsService {
   // ── SEDES ─────────────────────────────────────────────────────────
   getSedes() { return this.getAll('sedes'); }
   createSede(name: string, code: string) { return this.create('sedes', { name, code }); }
+  updateSede(id: string, name: string, code: string) { return this.update('sedes', id, { name, code }); }
+  deleteSede(id: string) { return this.remove('sedes', id); }
 
   // ── ACCESORIOS ────────────────────────────────────────────────────
   getAccessories() { return this.getAll('accessories'); }
