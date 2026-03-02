@@ -46,6 +46,30 @@ export class AppointmentsController {
     return this.svc.create(dto, user);
   }
 
+  // ── SLOTS OCUPADOS POR ASESOR ─────────────────────────────
+  @Get('slots')
+  @ApiOperation({
+    summary: 'Horarios ocupados de un asesor en una fecha',
+    description:
+      'Retorna el arreglo de `scheduledTime` ya reservados (no cancelados) para el asesor indicado en la fecha dada. ' +
+      'Úsalo en el frontend para deshabilitar visualmente los slots antes de agendar. ' +
+      '**Roles:** ASESOR, LIDER_TECNICO, JEFE_TALLER, SOPORTE',
+  })
+  @ApiQuery({ name: 'advisorId', required: true, description: 'UID del asesor', example: 'uid-abc123' })
+  @ApiQuery({ name: 'date', required: true, description: 'Fecha (YYYY-MM-DD)', example: '2026-03-15' })
+  @ApiResponse({
+    status: 200,
+    description: 'Array de horarios ocupados. Ej: ["09:00", "11:00"]',
+    schema: { type: 'array', items: { type: 'string' }, example: ['09:00', '11:00'] },
+  })
+  @Roles(RoleEnum.ASESOR, RoleEnum.LIDER_TECNICO, RoleEnum.JEFE_TALLER, RoleEnum.SOPORTE)
+  getOccupiedSlots(
+    @Query('advisorId') advisorId: string,
+    @Query('date') date: string,
+  ) {
+    return this.svc.getOccupiedSlots(advisorId, date);
+  }
+
   // ── LISTAR AGENDAMIENTOS ──────────────────────────────────
   @Get()
   @ApiOperation({

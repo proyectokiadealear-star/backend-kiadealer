@@ -1,4 +1,4 @@
-import { Injectable, BadRequestException, NotFoundException, Logger } from '@nestjs/common';
+import { Injectable, BadRequestException, ConflictException, NotFoundException, Logger } from '@nestjs/common';
 import { FirebaseService } from '../../firebase/firebase.service';
 import { VehiclesService } from '../vehicles/vehicles.service';
 import { NotificationsService } from '../notifications/notifications.service';
@@ -26,6 +26,26 @@ export class AppointmentsService {
     if (vehicle['status'] !== VehicleStatus.LISTO_PARA_ENTREGA) {
       throw new BadRequestException(`El vehículo debe estar LISTO_PARA_ENTREGA. Estado: ${vehicle['status']}`);
     }
+
+    // ── Verificar conflicto de horario para el asesor ──────────────────────
+    // Se consulta solo por assignedAdvisorId (índice simple automático) y se
+    // filtra scheduledDate + scheduledTime en memoria para evitar índices compuestos.
+    const advisorSnap = await this.db
+      .collection('appointments')
+      .where('assignedAdvisorId', '==', dto.assignedAdvisorId)
+      .where('scheduledDate', '==', dto.scheduledDate)
+      .get();
+
+    const slotTaken = advisorSnap.docs.some(
+      (d) => d.data()['scheduledTime'] === dto.scheduledTime && d.data()['status'] !== 'CANCELADO',
+    );
+
+    if (slotTaken) {
+      throw new ConflictException(
+        `El asesor ya tiene una entrega agendada el ${dto.scheduledDate} a las ${dto.scheduledTime}. Seleccione otro horario.`,
+      );
+    }
+    // ──────────────────────────────────────────────────────────────────────
 
     const aptId = uuidv4();
     const now = this.firebase.serverTimestamp();
@@ -77,6 +97,23 @@ export class AppointmentsService {
     ]);
 
     return { aptId, vehicleId: dto.vehicleId, newStatus: VehicleStatus.AGENDADO };
+  }
+
+  /**
+   * Retorna los horarios ya ocupados para un asesor en una fecha concreta.
+   * Excluye citas CANCELADAS. Usado por el frontend para deshabilitar slots.
+   */
+  async getOccupiedSlots(advisorId: string, date: string): Promise<string[]> {
+    const snap = await this.db
+      .collection('appointments')
+      .where('assignedAdvisorId', '==', advisorId)
+      .where('scheduledDate', '==', date)
+      .get();
+
+    return snap.docs
+      .map((d) => d.data())
+      .filter((d) => d['status'] !== 'CANCELADO')
+      .map((d) => d['scheduledTime'] as string);
   }
 
   async findAll(user: AuthenticatedUser, dateFrom?: string, dateTo?: string) {
