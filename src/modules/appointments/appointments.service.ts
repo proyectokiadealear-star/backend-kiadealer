@@ -150,7 +150,7 @@ export class AppointmentsService {
     const apt = doc.data()!;
 
     await this.db.collection('appointments').doc(aptId).update({
-      ...dto,
+      ...Object.fromEntries(Object.entries(dto).filter(([, v]) => v !== undefined)),
       updatedAt: this.firebase.serverTimestamp(),
     });
 

@@ -230,8 +230,9 @@ export class VehiclesService {
   async update(id: string, dto: UpdateVehicleDto, photoFile?: Express.Multer.File) {
     await this.assertExists(id);
 
+    // Filtrar undefined — Firestore lanza error si recibe campos undefined
     const updates: Record<string, unknown> = {
-      ...dto,
+      ...Object.fromEntries(Object.entries(dto).filter(([, v]) => v !== undefined)),
       updatedAt: this.firebase.serverTimestamp(),
     };
     delete updates['photoBase64'];

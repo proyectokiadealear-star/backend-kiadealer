@@ -102,7 +102,7 @@ export class UsersService {
     if (!doc.exists) throw new NotFoundException('Usuario no encontrado');
 
     const updates: Record<string, unknown> = {
-      ...dto,
+      ...Object.fromEntries(Object.entries(dto).filter(([, v]) => v !== undefined)),
       updatedAt: this.firebase.serverTimestamp(),
     };
 

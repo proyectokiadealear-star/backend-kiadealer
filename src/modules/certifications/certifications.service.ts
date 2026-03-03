@@ -188,7 +188,7 @@ export class CertificationsService {
     if (!doc.exists) throw new NotFoundException('Certificación no encontrada');
 
     const updates: Record<string, unknown> = {
-      ...dto,
+      ...Object.fromEntries(Object.entries(dto).filter(([, v]) => v !== undefined)),
       updatedAt: this.firebase.serverTimestamp(),
     };
 
