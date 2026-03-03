@@ -1,4 +1,5 @@
-import { Injectable, NotFoundException, Logger } from '@nestjs/common';
+import { Injectable, NotFoundException, InternalServerErrorException, Logger } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { FirebaseService } from '../../firebase/firebase.service';
 import { CreateUserDto, UpdateUserDto } from './dto/user.dto';
 import { AuthenticatedUser } from '../../common/interfaces/authenticated-user.interface';
@@ -10,7 +11,10 @@ import * as admin from 'firebase-admin';
 export class UsersService {
   private readonly logger = new Logger(UsersService.name);
 
-  constructor(private readonly firebase: FirebaseService) {}
+  constructor(
+    private readonly firebase: FirebaseService,
+    private readonly config: ConfigService,
+  ) {}
 
   private get db() { return this.firebase.firestore(); }
 
@@ -44,9 +48,23 @@ export class UsersService {
       createdBy: creator.uid,
     });
 
-    // 4. Enviar reset de contraseña para que el usuario establezca la suya
-    // (en producción, enviar email de bienvenida)
+    // 4. Generar reset link Y enviar el correo para que el usuario establezca su contraseña
     const resetLink = await this.firebase.auth().generatePasswordResetLink(dto.email);
+
+    const apiKey = this.config.getOrThrow<string>('FIREBASE_WEB_API_KEY');
+    const oobRes = await fetch(
+      `https://identitytoolkit.googleapis.com/v1/accounts:sendOobCode?key=${apiKey}`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ requestType: 'PASSWORD_RESET', email: dto.email }),
+      },
+    );
+    if (!oobRes.ok) {
+      this.logger.warn(`No se pudo enviar correo de bienvenida a ${dto.email}`);
+    } else {
+      this.logger.log(`📧 Correo de bienvenida/reset enviado a: ${dto.email}`);
+    }
 
     this.logger.log(`Usuario creado: ${userRecord.uid} (${dto.email})`);
 
@@ -125,7 +143,32 @@ export class UsersService {
     if (!doc.exists) throw new NotFoundException('Usuario no encontrado');
 
     const email = doc.data()!['email'] as string;
+
+    // 1. Generar el link de reset con el Admin SDK (sirve para retornarlo al admin)
     const resetLink = await this.firebase.auth().generatePasswordResetLink(email);
+
+    // 2. Enviar el correo a través de la Firebase Auth REST API
+    //    generatePasswordResetLink() SOLO genera el link; NO envía ningún correo.
+    //    sendOobCode SÍ dispara el envío del email desde Firebase.
+    const apiKey = this.config.getOrThrow<string>('FIREBASE_WEB_API_KEY');
+    const url = `https://identitytoolkit.googleapis.com/v1/accounts:sendOobCode?key=${apiKey}`;
+
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ requestType: 'PASSWORD_RESET', email }),
+    });
+
+    if (!res.ok) {
+      const json = (await res.json()) as { error?: { message?: string } };
+      const errorCode = json.error?.message ?? 'UNKNOWN';
+      this.logger.error(`Error enviando reset email a ${email}: ${errorCode}`);
+      throw new InternalServerErrorException(
+        'No se pudo enviar el correo de restablecimiento. Intente más tarde.',
+      );
+    }
+
+    this.logger.log(`📧 Correo de restablecimiento enviado a: ${email}`);
     return { uid, email, resetLink };
   }
 

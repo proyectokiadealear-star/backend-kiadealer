@@ -2,6 +2,7 @@ import { Controller, Post, Body, HttpCode, HttpStatus } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiOkResponse } from '@nestjs/swagger';
 import { AuthService } from './auth.service';
 import { LoginDto } from './dto/login.dto';
+import { ForgotPasswordDto } from './dto/forgot-password.dto';
 
 @ApiTags('Auth')
 @Controller('auth')
@@ -35,5 +36,23 @@ export class AuthController {
   })
   login(@Body() dto: LoginDto) {
     return this.svc.login(dto);
+  }
+
+  @Post('forgot-password')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Solicitar restablecimiento de contraseña',
+    description:
+      'Envía un correo de restablecimiento de contraseña a la dirección indicada mediante Firebase Auth. ' +
+      'Por seguridad, se devuelve siempre el mismo mensaje genérico independientemente de si el email existe o no.',
+  })
+  @ApiOkResponse({
+    description: 'Solicitud procesada',
+    schema: {
+      example: { message: 'Si el correo está registrado, recibirás un enlace de restablecimiento.' },
+    },
+  })
+  forgotPassword(@Body() dto: ForgotPasswordDto) {
+    return this.svc.forgotPassword(dto);
   }
 }

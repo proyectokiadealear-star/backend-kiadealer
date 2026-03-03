@@ -2,11 +2,13 @@ import {
   Injectable,
   UnauthorizedException,
   InternalServerErrorException,
+  NotFoundException,
   Logger,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { FirebaseService } from '../../firebase/firebase.service';
 import { LoginDto } from './dto/login.dto';
+import { ForgotPasswordDto } from './dto/forgot-password.dto';
 
 interface FirebaseSignInResponse {
   idToken: string;
@@ -92,6 +94,56 @@ export class AuthService {
         active: decoded.active,
       },
     };
+  }
+
+  async forgotPassword(dto: ForgotPasswordDto): Promise<{ message: string }> {
+    const apiKey = this.config.getOrThrow<string>('FIREBASE_WEB_API_KEY');
+    const url = `https://identitytoolkit.googleapis.com/v1/accounts:sendOobCode?key=${apiKey}`;
+
+    // Verificar que el usuario existe en Firestore antes de enviar el correo
+    const usersSnap = await this.firebase
+      .firestore()
+      .collection('users')
+      .where('email', '==', dto.email)
+      .limit(1)
+      .get();
+
+    if (usersSnap.empty) {
+      // Respuesta genérica por seguridad (no revelar si el email existe o no)
+      this.logger.warn(`Intento de reset para email no registrado: ${dto.email}`);
+      return { message: 'Si el correo está registrado, recibirás un enlace de restablecimiento.' };
+    }
+
+    const userDoc = usersSnap.docs[0].data();
+    if (!userDoc['active']) {
+      this.logger.warn(`Intento de reset para usuario inactivo: ${dto.email}`);
+      return { message: 'Si el correo está registrado, recibirás un enlace de restablecimiento.' };
+    }
+
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        requestType: 'PASSWORD_RESET',
+        email: dto.email,
+      }),
+    });
+
+    if (!res.ok) {
+      const json = (await res.json()) as { error?: { message?: string } };
+      const errorCode = json.error?.message ?? 'UNKNOWN';
+      this.logger.error(`Error enviando reset email a ${dto.email}: ${errorCode}`);
+
+      if (errorCode === 'EMAIL_NOT_FOUND') {
+        // Por seguridad retornamos el mismo mensaje genérico
+        return { message: 'Si el correo está registrado, recibirás un enlace de restablecimiento.' };
+      }
+
+      throw new InternalServerErrorException('No se pudo enviar el correo de restablecimiento. Intente más tarde.');
+    }
+
+    this.logger.log(`📧 Correo de restablecimiento enviado a: ${dto.email}`);
+    return { message: 'Si el correo está registrado, recibirás un enlace de restablecimiento.' };
   }
 
   /** Traduce los códigos de error de Firebase a mensajes legibles */
