@@ -99,7 +99,7 @@ export class ServiceOrdersService {
       updatedAt: now,
     };
 
-    await this.db.collection('serviceOrders').doc(orderId).set(orderData);
+    await this.db.collection('service-orders').doc(orderId).set(orderData);
 
     await this.vehiclesService.changeStatus(dto.vehicleId, VehicleStatus.ORDEN_GENERADA, user, {
       notes: `OT ${orderNumber} generada por ${user.displayName ?? user.email}`,
@@ -133,7 +133,7 @@ export class ServiceOrdersService {
   }
 
   async findAll(user: AuthenticatedUser, filters?: { sede?: string; status?: string; vehicleId?: string }) {
-    let query: FirebaseFirestore.Query = this.db.collection('serviceOrders');
+    let query: FirebaseFirestore.Query = this.db.collection('service-orders');
 
     // PERSONAL_TALLER solo ve sus OTs asignadas
     if (user.role === RoleEnum.PERSONAL_TALLER) {
@@ -167,7 +167,7 @@ export class ServiceOrdersService {
   }
 
   async findOne(id: string) {
-    const doc = await this.db.collection('serviceOrders').doc(id).get();
+    const doc = await this.db.collection('service-orders').doc(id).get();
     if (!doc.exists) throw new NotFoundException('Orden de trabajo no encontrada');
     return doc.data();
   }
@@ -191,7 +191,7 @@ export class ServiceOrdersService {
     const previousTechnicianName: string | null = order!['assignedTechnicianName'] ?? null;
     const isReassignment = !!previousTechnicianId && previousTechnicianId !== dto.technicianUid;
 
-    await this.db.collection('serviceOrders').doc(orderId).update({
+    await this.db.collection('service-orders').doc(orderId).update({
       assignedTechnicianId: dto.technicianUid,
       assignedTechnicianName: dto.technicianName,
       assignedAt: this.firebase.serverTimestamp(),
@@ -268,7 +268,7 @@ export class ServiceOrdersService {
     const allInstalled = checklist.every((c) => c.installed);
     const newOrderStatus = allInstalled ? 'INSTALACION_COMPLETA' : 'EN_INSTALACION';
 
-    await this.db.collection('serviceOrders').doc(orderId).update({
+    await this.db.collection('service-orders').doc(orderId).update({
       checklist,
       status: newOrderStatus,
       updatedAt: this.firebase.serverTimestamp(),
@@ -328,7 +328,7 @@ export class ServiceOrdersService {
       throw new BadRequestException('La instalación debe estar completa para marcar listo para entrega');
     }
 
-    await this.db.collection('serviceOrders').doc(orderId).update({
+    await this.db.collection('service-orders').doc(orderId).update({
       status: 'LISTO_ENTREGA',
       updatedAt: this.firebase.serverTimestamp(),
     });
@@ -372,7 +372,7 @@ export class ServiceOrdersService {
     // Obtener la OT actual
     // Sin orderBy para evitar índice compuesto — ordenamos en memoria
     const currentOrderSnap = await this.db
-      .collection('serviceOrders')
+      .collection('service-orders')
       .where('vehicleId', '==', dto.vehicleId)
       .where('isReopening', '==', false)
       .get();
@@ -410,7 +410,7 @@ export class ServiceOrdersService {
       updatedAt: now,
     };
 
-    await this.db.collection('serviceOrders').doc(orderId).set(reopenData);
+    await this.db.collection('service-orders').doc(orderId).set(reopenData);
 
     await this.vehiclesService.changeStatus(dto.vehicleId, VehicleStatus.REAPERTURA_OT, user, {
       notes: dto.reason,

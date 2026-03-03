@@ -87,7 +87,7 @@ export class NotificationsService {
     });
   }
 
-  async getNotifications(uid: string, userRole: RoleEnum, onlyUnread: boolean, limit: number) {
+  async getNotifications(uid: string, userRole: RoleEnum, userSede: string, onlyUnread: boolean, limit: number) {
     let query: FirebaseFirestore.Query = this.db
       .collection('notifications')
       .where('targetRole', '==', userRole);
@@ -100,6 +100,8 @@ export class NotificationsService {
     const snapshot = await query.get();
     return snapshot.docs
       .map((d) => d.data())
+      // Filtrar por sede en memoria: ver las de su propia sede + las dirigidas a ALL
+      .filter((n) => n['targetSede'] === userSede || n['targetSede'] === SedeEnum.ALL)
       .sort((a, b) => (b['createdAt']?._seconds ?? 0) - (a['createdAt']?._seconds ?? 0))
       .slice(0, limit);
   }

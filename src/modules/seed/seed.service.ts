@@ -562,11 +562,13 @@ export class SeedService {
       await ref.set(vehicleData);
 
       await ref.collection('statusHistory').add({
-        from:      null,
-        to:        v.status,
-        changedBy: jefeTallerUid,
-        changedAt: ts,
-        note:      'Creado por seed',
+        previousStatus:  null,
+        newStatus:       v.status,
+        changedBy:       jefeTallerUid,
+        changedByName:   'Seed',
+        changedAt:       ts,
+        sede:            v.sede,
+        notes:           'Creado por seed',
       });
 
       // Certificación

@@ -29,7 +29,7 @@ export class NotificationsController {
     @Query('limit') limit?: string,
   ) {
     const onlyUnread = read === 'false';
-    return this.svc.getNotifications(user.uid, user.role, onlyUnread, Number(limit ?? 20));
+    return this.svc.getNotifications(user.uid, user.role, user.sede, onlyUnread, Number(limit ?? 20));
   }
 
   @Patch(':id/read')

@@ -119,7 +119,15 @@ export class AppointmentsService {
   async findAll(user: AuthenticatedUser, dateFrom?: string, dateTo?: string) {
     let query: FirebaseFirestore.Query = this.db.collection('appointments');
 
-    if (user.role !== RoleEnum.JEFE_TALLER) {
+    if (user.role === RoleEnum.JEFE_TALLER || user.role === RoleEnum.SOPORTE) {
+      // Ve todo — sin restricción de sede
+    } else if (user.role === RoleEnum.LIDER_TECNICO || user.role === RoleEnum.PERSONAL_TALLER || user.role === RoleEnum.DOCUMENTACION) {
+      // Ve todas las citas de su sede
+      query = query.where('sede', '==', user.sede);
+    } else if (user.role === RoleEnum.ASESOR) {
+      // Solo ve sus propias citas asignadas
+      query = query.where('assignedAdvisorId', '==', user.uid);
+    } else {
       query = query.where('sede', '==', user.sede);
     }
 

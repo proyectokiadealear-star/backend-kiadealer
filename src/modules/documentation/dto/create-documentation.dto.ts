@@ -25,9 +25,20 @@ export class AccessoryItemDto {
   @IsEnum(AccessoryKey)
   key: AccessoryKey;
 
-  @ApiProperty({ enum: AccessoryClassification })
+  @ApiPropertyOptional({
+    enum: AccessoryClassification,
+    description: 'Si no se envía o está vacío, se asume NO_APLICA',
+    default: AccessoryClassification.NO_APLICA,
+  })
+  @IsOptional()
+  @Transform(({ value }) => {
+    if (!value || !Object.values(AccessoryClassification).includes(value)) {
+      return AccessoryClassification.NO_APLICA;
+    }
+    return value;
+  })
   @IsEnum(AccessoryClassification)
-  classification: AccessoryClassification;
+  classification: AccessoryClassification = AccessoryClassification.NO_APLICA;
 
   @ApiPropertyOptional({ description: 'Solo para el campo "otros"' })
   @IsOptional()

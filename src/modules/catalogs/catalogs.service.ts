@@ -1,6 +1,5 @@
-import { Injectable, NotFoundException, Logger } from '@nestjs/common';
+import { Injectable, NotFoundException, ConflictException, Logger } from '@nestjs/common';
 import { FirebaseService } from '../../firebase/firebase.service';
-import { v4 as uuidv4 } from 'uuid';
 
 @Injectable()
 export class CatalogsService {
@@ -16,14 +15,38 @@ export class CatalogsService {
     return snapshot.docs.map((d) => d.data());
   }
 
+  /**
+   * Convierte un nombre en un ID slug determinista — igual que en SeedService.
+   * Garantiza que el mismo nombre siempre produce el mismo ID.
+   */
+  private toSlugId(name: string): string {
+    return name
+      .toLowerCase()
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/(^-|-$)/g, '');
+  }
+
   private async create(collection: string, data: Record<string, unknown>) {
-    // Normalize all string values to UPPERCASE before persisting
+    // Normalizar strings a MAYUSCULAS
     const normalized = Object.fromEntries(
       Object.entries(data).map(([k, v]) => [k, typeof v === 'string' ? v.toUpperCase().trim() : v]),
     );
-    const id = uuidv4();
+
+    // ID determinista basado en el nombre (igual que seed → sin duplicados)
+    const id = this.toSlugId(normalized['name'] as string);
+
+    const ref  = this.db.collection('catalogs').doc(collection).collection('items').doc(id);
+    const snap = await ref.get();
+    if (snap.exists) {
+      throw new ConflictException(
+        `Ya existe un ítem con el nombre "${normalized['name']}" en el catálogo '${collection}'. ID: ${id}`,
+      );
+    }
+
     const itemData = { id, ...normalized, createdAt: this.firebase.serverTimestamp() };
-    await this.db.collection('catalogs').doc(collection).collection('items').doc(id).set(itemData);
+    await ref.set(itemData);
     return itemData;
   }
 

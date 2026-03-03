@@ -81,7 +81,7 @@ export class CatalogsController {
 
   @Patch('colors/:id')
   @ApiOperation({ summary: 'Editar nombre de color', description: '**Roles:** JEFE_TALLER, DOCUMENTACION, SOPORTE' })
-  @ApiParam({ name: 'id', description: 'UUID del color' })
+  @ApiParam({ name: 'id', description: 'Slug del color (ej: blanco-glaciar). Retornado en el campo `id` del GET.' })
   @ApiBody({ type: NameDto })
   @ApiResponse({ status: 200, description: 'Color actualizado' })
   @ApiResponse({ status: 404, description: 'Color no encontrado' })
@@ -90,7 +90,7 @@ export class CatalogsController {
 
   @Delete('colors/:id')
   @ApiOperation({ summary: 'Eliminar color', description: '**Roles:** JEFE_TALLER, SOPORTE' })
-  @ApiParam({ name: 'id', description: 'UUID del color' })
+  @ApiParam({ name: 'id', description: 'Slug del color (ej: blanco-glaciar). Retornado en el campo `id` del GET.' })
   @ApiResponse({ status: 200, description: 'Color eliminado' })
   @ApiResponse({ status: 404, description: 'Color no encontrado' })
   @Roles(RoleEnum.JEFE_TALLER, RoleEnum.SOPORTE)
@@ -111,7 +111,7 @@ export class CatalogsController {
 
   @Patch('models/:id')
   @ApiOperation({ summary: 'Editar nombre de modelo', description: '**Roles:** JEFE_TALLER, SOPORTE' })
-  @ApiParam({ name: 'id', description: 'UUID del modelo' })
+  @ApiParam({ name: 'id', description: 'Slug del modelo (ej: kia-sportage). Retornado en el campo `id` del GET.' })
   @ApiBody({ type: NameDto })
   @ApiResponse({ status: 200, description: 'Modelo actualizado' })
   @ApiResponse({ status: 404, description: 'Modelo no encontrado' })
@@ -120,7 +120,7 @@ export class CatalogsController {
 
   @Delete('models/:id')
   @ApiOperation({ summary: 'Eliminar modelo', description: '**Roles:** JEFE_TALLER, SOPORTE' })
-  @ApiParam({ name: 'id', description: 'UUID del modelo' })
+  @ApiParam({ name: 'id', description: 'Slug del modelo (ej: kia-sportage). Retornado en el campo `id` del GET.' })
   @ApiResponse({ status: 200, description: 'Modelo eliminado' })
   @Roles(RoleEnum.JEFE_TALLER, RoleEnum.SOPORTE)
   deleteModel(@Param('id') id: string) { return this.svc.deleteModel(id); }
@@ -140,7 +140,7 @@ export class CatalogsController {
 
   @Patch('concessionaires/:id')
   @ApiOperation({ summary: 'Editar nombre de concesionario', description: '**Roles:** JEFE_TALLER, DOCUMENTACION, SOPORTE' })
-  @ApiParam({ name: 'id', description: 'UUID del concesionario' })
+  @ApiParam({ name: 'id', description: 'Slug del concesionario (ej: logimanta). Retornado en el campo `id` del GET.' })
   @ApiBody({ type: NameDto })
   @ApiResponse({ status: 200, description: 'Concesionario actualizado' })
   @ApiResponse({ status: 404, description: 'Concesionario no encontrado' })
@@ -149,7 +149,7 @@ export class CatalogsController {
 
   @Delete('concessionaires/:id')
   @ApiOperation({ summary: 'Eliminar concesionario', description: '**Roles:** JEFE_TALLER, SOPORTE' })
-  @ApiParam({ name: 'id', description: 'UUID del concesionario' })
+  @ApiParam({ name: 'id', description: 'Slug del concesionario (ej: logimanta). Retornado en el campo `id` del GET.' })
   @ApiResponse({ status: 200, description: 'Concesionario eliminado' })
   @Roles(RoleEnum.JEFE_TALLER, RoleEnum.SOPORTE)
   deleteConcessionaire(@Param('id') id: string) { return this.svc.deleteConcessionaire(id); }
@@ -169,7 +169,7 @@ export class CatalogsController {
 
   @Patch('sedes/:id')
   @ApiOperation({ summary: 'Editar sede', description: '**Roles:** JEFE_TALLER, SOPORTE' })
-  @ApiParam({ name: 'id', description: 'UUID de la sede' })
+  @ApiParam({ name: 'id', description: 'Slug de la sede (ej: surmotor). Retornado en el campo `id` del GET.' })
   @ApiBody({ type: NameCodeDto })
   @ApiResponse({ status: 200, description: 'Sede actualizada' })
   @ApiResponse({ status: 404, description: 'Sede no encontrada' })
@@ -178,7 +178,7 @@ export class CatalogsController {
 
   @Delete('sedes/:id')
   @ApiOperation({ summary: 'Eliminar sede', description: '**Roles:** JEFE_TALLER, SOPORTE' })
-  @ApiParam({ name: 'id', description: 'UUID de la sede' })
+  @ApiParam({ name: 'id', description: 'Slug de la sede (ej: surmotor). Retornado en el campo `id` del GET.' })
   @ApiResponse({ status: 200, description: 'Sede eliminada' })
   @ApiResponse({ status: 404, description: 'Sede no encontrada' })
   @Roles(RoleEnum.JEFE_TALLER, RoleEnum.SOPORTE)
@@ -210,7 +210,7 @@ export class CatalogsController {
 
   @Patch('accessories/:id')
   @ApiOperation({ summary: 'Editar nombre de accesorio', description: '**Roles:** JEFE_TALLER, SOPORTE' })
-  @ApiParam({ name: 'id', description: 'UUID del accesorio' })
+  @ApiParam({ name: 'id', description: 'Slug del accesorio (ej: boton-de-encendido). Retornado en el campo `id` del GET.' })
   @ApiBody({ type: NameDto })
   @ApiResponse({ status: 200, description: 'Accesorio actualizado' })
   @ApiResponse({ status: 404, description: 'Accesorio no encontrado' })
@@ -219,7 +219,7 @@ export class CatalogsController {
 
   @Delete('accessories/:id')
   @ApiOperation({ summary: 'Eliminar accesorio del catálogo', description: '**Roles:** JEFE_TALLER, SOPORTE' })
-  @ApiParam({ name: 'id', description: 'UUID del accesorio' })
+  @ApiParam({ name: 'id', description: 'Slug del accesorio (ej: boton-de-encendido). Retornado en el campo `id` del GET.' })
   @ApiResponse({ status: 200, description: 'Accesorio eliminado' })
   @Roles(RoleEnum.JEFE_TALLER, RoleEnum.SOPORTE)
   deleteAccessory(@Param('id') id: string) { return this.svc.deleteAccessory(id); }
