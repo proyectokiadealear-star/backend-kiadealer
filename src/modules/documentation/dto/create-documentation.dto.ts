@@ -10,7 +10,7 @@ import {
 } from 'class-validator';
 import { Transform, Type, plainToInstance } from 'class-transformer';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { AccessoryKey, AccessoryClassification } from '../../../common/enums/accessory-key.enum';
+import { AccessoryClassification } from '../../../common/enums/accessory-key.enum';
 import { PaymentMethod } from '../../../common/enums/payment-method.enum';
 import { IsEcuadorianCedula } from '../../../common/validators/ecuador-cedula.validator';
 
@@ -21,10 +21,14 @@ export enum RegistrationType {
 }
 
 export class AccessoryItemDto {
-  @ApiProperty({ enum: AccessoryKey })
-  @Transform(({ value }) => (typeof value === 'string' ? value.toLowerCase() : value))
-  @IsEnum(AccessoryKey)
-  key: AccessoryKey;
+  @ApiProperty({
+    description: 'Key del accesorio, tal como viene del catálogo GET /catalogs/accessories/items (campo id/key). Se normaliza a minúsculas.',
+    example: 'boton_encendido',
+  })
+  @Transform(({ value }) => (typeof value === 'string' ? value.toLowerCase().trim() : value))
+  @IsString()
+  @IsNotEmpty()
+  key: string;
 
   @ApiPropertyOptional({
     enum: AccessoryClassification,
