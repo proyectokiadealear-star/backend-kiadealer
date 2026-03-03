@@ -22,6 +22,7 @@ export enum RegistrationType {
 
 export class AccessoryItemDto {
   @ApiProperty({ enum: AccessoryKey })
+  @Transform(({ value }) => (typeof value === 'string' ? value.toLowerCase() : value))
   @IsEnum(AccessoryKey)
   key: AccessoryKey;
 
