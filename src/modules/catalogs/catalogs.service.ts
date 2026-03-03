@@ -29,9 +29,12 @@ export class CatalogsService {
   }
 
   private async create(collection: string, data: Record<string, unknown>) {
-    // Normalizar strings a MAYUSCULAS
+    // Normalizar a MAYUSCULAS solo campos de display (name). Los campos código (key, code) se conservan tal cual.
+    const CODE_FIELDS = new Set(['key', 'code']);
     const normalized = Object.fromEntries(
-      Object.entries(data).map(([k, v]) => [k, typeof v === 'string' ? v.toUpperCase().trim() : v]),
+      Object.entries(data).map(([k, v]) =>
+        [k, typeof v === 'string' ? (CODE_FIELDS.has(k) ? v.trim() : v.toUpperCase().trim()) : v],
+      ),
     );
 
     // ID determinista basado en el nombre (igual que seed → sin duplicados)
@@ -54,9 +57,12 @@ export class CatalogsService {
     const ref = this.db.collection('catalogs').doc(collection).collection('items').doc(id);
     const snap = await ref.get();
     if (!snap.exists) throw new NotFoundException(`${collection}/${id} no encontrado`);
-    // Normalize all string values to UPPERCASE before persisting
+    // Normalizar a MAYUSCULAS solo campos de display (name). Los campos código (key, code) se conservan tal cual.
+    const CODE_FIELDS = new Set(['key', 'code']);
     const normalized = Object.fromEntries(
-      Object.entries(data).map(([k, v]) => [k, typeof v === 'string' ? v.toUpperCase().trim() : v]),
+      Object.entries(data).map(([k, v]) =>
+        [k, typeof v === 'string' ? (CODE_FIELDS.has(k) ? v.trim() : v.toUpperCase().trim()) : v],
+      ),
     );
     await ref.update({ ...normalized, updatedAt: this.firebase.serverTimestamp() });
     return { id, updated: true };
