@@ -48,23 +48,10 @@ export class UsersService {
       createdBy: creator.uid,
     });
 
-    // 4. Generar reset link Y enviar el correo para que el usuario establezca su contraseña
+    // 4. Generar link de reset para retornarlo al administrador.
+    //    NO llamar sendOobCode aquí — generaría un segundo token e invalidaría este link.
+    //    El admin comparte el link directamente con el nuevo usuario.
     const resetLink = await this.firebase.auth().generatePasswordResetLink(dto.email);
-
-    const apiKey = this.config.getOrThrow<string>('FIREBASE_WEB_API_KEY');
-    const oobRes = await fetch(
-      `https://identitytoolkit.googleapis.com/v1/accounts:sendOobCode?key=${apiKey}`,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ requestType: 'PASSWORD_RESET', email: dto.email }),
-      },
-    );
-    if (!oobRes.ok) {
-      this.logger.warn(`No se pudo enviar correo de bienvenida a ${dto.email}`);
-    } else {
-      this.logger.log(`📧 Correo de bienvenida/reset enviado a: ${dto.email}`);
-    }
 
     this.logger.log(`Usuario creado: ${userRecord.uid} (${dto.email})`);
 
@@ -75,6 +62,15 @@ export class UsersService {
       role: dto.role,
       sede: dto.sede,
       resetLink,
+    };
+
+    return {
+      uid: userRecord.uid,
+      email: dto.email,
+      displayName: dto.displayName,
+      role: dto.role,
+      sede: dto.sede,
+      passwordResetEmailSent: oobRes.ok,
     };
   }
 
@@ -144,12 +140,10 @@ export class UsersService {
 
     const email = doc.data()!['email'] as string;
 
-    // 1. Generar el link de reset con el Admin SDK (sirve para retornarlo al admin)
-    const resetLink = await this.firebase.auth().generatePasswordResetLink(email);
-
-    // 2. Enviar el correo a través de la Firebase Auth REST API
-    //    generatePasswordResetLink() SOLO genera el link; NO envía ningún correo.
-    //    sendOobCode SÍ dispara el envío del email desde Firebase.
+    // Enviar el correo a través de la Firebase Auth REST API.
+    // sendOobCode genera el token Y envía el email en una sola llamada.
+    // NO llamar generatePasswordResetLink antes — generaría un token distinto
+    // que invalidaría el que sendOobCode acaba de crear.
     const apiKey = this.config.getOrThrow<string>('FIREBASE_WEB_API_KEY');
     const url = `https://identitytoolkit.googleapis.com/v1/accounts:sendOobCode?key=${apiKey}`;
 
@@ -169,7 +163,7 @@ export class UsersService {
     }
 
     this.logger.log(`📧 Correo de restablecimiento enviado a: ${email}`);
-    return { uid, email, resetLink };
+    return { uid, email, message: 'Correo de restablecimiento enviado correctamente.' };
   }
 
   async registerFcmToken(uid: string, token: string) {
