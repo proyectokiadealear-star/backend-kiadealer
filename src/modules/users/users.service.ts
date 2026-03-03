@@ -51,7 +51,13 @@ export class UsersService {
     // 4. Generar link de reset para retornarlo al administrador.
     //    NO llamar sendOobCode aquí — generaría un segundo token e invalidaría este link.
     //    El admin comparte el link directamente con el nuevo usuario.
-    const resetLink = await this.firebase.auth().generatePasswordResetLink(dto.email);
+    let resetLink: string | null = null;
+    try {
+      resetLink = await this.firebase.auth().generatePasswordResetLink(dto.email);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      this.logger.warn(`No se pudo generar reset link para ${dto.email}: ${msg}`);
+    }
 
     this.logger.log(`Usuario creado: ${userRecord.uid} (${dto.email})`);
 
@@ -62,15 +68,6 @@ export class UsersService {
       role: dto.role,
       sede: dto.sede,
       resetLink,
-    };
-
-    return {
-      uid: userRecord.uid,
-      email: dto.email,
-      displayName: dto.displayName,
-      role: dto.role,
-      sede: dto.sede,
-      passwordResetEmailSent: oobRes.ok,
     };
   }
 
