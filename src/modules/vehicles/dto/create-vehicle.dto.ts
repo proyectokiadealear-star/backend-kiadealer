@@ -13,19 +13,20 @@ import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 export class CreateVehicleDto {
   @ApiProperty({
     description:
-      'Número de chasis / VIN del vehículo (estándar ISO 3779). ' +
-      '17 caracteres alfanuméricos, excluye las letras I, O y Q. ' +
-      'Se almacena en MAYUSCULAS. Escaneado vía QR en la app móvil.',
-    example: '9BFPK62M0PB001234',
-    pattern: '^[A-HJ-NPR-Z0-9]{17}$',
+      'Número de chasis / VIN del vehículo. Acepta VINs internacionales (ISO 3779, 17 chars) ' +
+      'y chasis ecuatorianos ensamblados por MARESA (arrancan con "8L", ej: 8LGFB8149TE011987). ' +
+      'Entre 6 y 20 caracteres alfanuméricos. Se almacena en MAYUSCULAS.',
+    example: '8LGFB8149TE011987',
+    pattern: '^[A-Z0-9]{6,20}$',
   })
   @IsString()
   @IsNotEmpty()
-  @Matches(/^[A-HJ-NPR-Z0-9]{17}$/, {
-    message:
-      'Chasis inválido. Debe ser un VIN ISO 3779: 17 caracteres alfanuméricos sin las letras I, O ni Q.',
-  })
   @Transform(({ value }) => (typeof value === 'string' ? value.toUpperCase().trim() : value))
+  @Matches(/^[A-Z0-9]{6,20}$/, {
+    message:
+      'Chasis inválido. Debe tener entre 6 y 20 caracteres alfanuméricos (A-Z, 0-9). ' +
+      'Ejemplos válidos: 8LGFB8149TE011987 (ecuatoriano) o 9BFPK62M0PB001234 (internacional).',
+  })
   chassis: string;
 
   @ApiProperty({

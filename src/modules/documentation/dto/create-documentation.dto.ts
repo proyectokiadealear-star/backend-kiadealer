@@ -63,13 +63,13 @@ export class CreateDocumentationDto {
 
   @ApiProperty({
     description:
-      'Cédula de identidad ecuatoriana del cliente. 10 dígitos, persona natural (dígito 3 < 6), ' +
-      'código de provincia válido (01–24) y dígito verificador correcto.',
+      'Cédula de identidad ecuatoriana (10 dígitos) o RUC de persona natural (13 dígitos = cédula válida + 001). ' +
+      'Código de provincia válido (01–24), tercer dígito < 6 y dígito verificador correcto.',
     example: '1723456789',
   })
   @IsString()
   @IsNotEmpty()
-  @Matches(/^\d{10}$/, { message: 'La cédula debe tener exactamente 10 dígitos numéricos.' })
+  @Matches(/^\d{10}(\d{3})?$/, { message: 'La cédula debe tener 10 dígitos o el RUC 13 dígitos numéricos.' })
   @IsEcuadorianCedula()
   @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
   clientId: string;

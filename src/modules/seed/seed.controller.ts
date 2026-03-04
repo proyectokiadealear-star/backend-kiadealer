@@ -1,5 +1,9 @@
-import { Controller, Post, Body, HttpCode, HttpStatus } from '@nestjs/common';
-import { ApiOperation, ApiProperty, ApiTags } from '@nestjs/swagger';
+import {
+  Controller, Post, Body, HttpCode, HttpStatus,
+  UploadedFile, UseInterceptors, BadRequestException,
+} from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
+import { ApiOperation, ApiProperty, ApiTags, ApiConsumes, ApiBody } from '@nestjs/swagger';
 import { IsBoolean, IsOptional, IsString, IsNotEmpty } from 'class-validator';
 import { SeedService } from './seed.service';
 
@@ -51,5 +55,78 @@ export class SeedController {
   })
   run(@Body() dto: RunSeedDto) {
     return this.seedService.runSeed(dto.secretKey, { clear: dto.clear ?? false });
+  }
+
+  /**
+   * POST /seed/inspect-file
+   *
+   * Diagnóstico: devuelve las columnas y las primeras 3 filas del archivo
+   * SIN insertar nada en Firestore. Útil para verificar nombres de columnas.
+   */
+  @Post('inspect-file')
+  @HttpCode(HttpStatus.OK)
+  @UseInterceptors(FileInterceptor('file'))
+  @ApiConsumes('multipart/form-data')
+  @ApiBody({
+    schema: {
+      type: 'object',
+      required: ['secretKey', 'file'],
+      properties: {
+        secretKey: { type: 'string', example: 'kia-seed-2024' },
+        file: { type: 'string', format: 'binary' },
+      },
+    },
+  })
+  @ApiOperation({
+    summary: 'Inspeccionar columnas del archivo (diagnóstico)',
+    description: 'Lee el archivo y devuelve las columnas encontradas + 3 filas de muestra. No inserta datos.',
+  })
+  async inspectFile(
+    @UploadedFile() file: Express.Multer.File,
+    @Body('secretKey') secretKey: string,
+  ) {
+    if (!file) throw new BadRequestException('Se requiere un archivo (campo "file")');
+    return this.seedService.inspectFile(file.buffer, file.mimetype, secretKey);
+  }
+
+  /**
+   * POST /seed/from-excel
+   *
+   * Importa vehículos desde Excel (.xlsx/.xls) o CSV.
+   * Búsqueda de columnas fuzzy: sin tildes, case-insensitive.
+   * Si no sabes los nombres exactos de columna, usa /seed/inspect-file primero.
+   */
+  @Post('from-excel')
+  @HttpCode(HttpStatus.OK)
+  @UseInterceptors(FileInterceptor('file'))
+  @ApiConsumes('multipart/form-data')
+  @ApiBody({
+    schema: {
+      type: 'object',
+      required: ['secretKey', 'file'],
+      properties: {
+        secretKey: { type: 'string', example: 'kia-seed-2024' },
+        file: { type: 'string', format: 'binary' },
+        clear: { type: 'string', enum: ['true', 'false'], default: 'false', description: 'Si es "true", borra todas las colecciones antes de importar (¡destructivo!)' },
+      },
+    },
+  })
+  @ApiOperation({
+    summary: 'Importar vehículos desde Excel o CSV',
+    description:
+      'Lee la primera hoja del archivo .xlsx/.xls o el CSV y ejecuta el seed. ' +
+      'Idempotente: omite chasis ya existentes. Requiere secretKey válida. ' +
+      'Pasar clear=true para borrar datos existentes antes de importar (usar con precaución). ' +
+      'Usa /seed/inspect-file para verificar que las columnas sean detectadas correctamente.',
+  })
+  async fromExcel(
+    @UploadedFile() file: Express.Multer.File,
+    @Body('secretKey') secretKey: string,
+    @Body('clear') clear?: string,
+  ) {
+    if (!file) throw new BadRequestException('Se requiere un archivo Excel o CSV (campo "file")');
+    return this.seedService.seedFromExcel(file.buffer, file.mimetype, secretKey, {
+      clear: clear === 'true',
+    });
   }
 }

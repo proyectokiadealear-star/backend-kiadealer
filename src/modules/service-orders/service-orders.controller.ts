@@ -149,7 +149,7 @@ export class ServiceOrdersController {
   @ApiResponse({ status: 400, description: 'La OT no está en estado GENERADA ni ASIGNADA' })
   @ApiResponse({ status: 403, description: 'Rol no autorizado' })
   @ApiResponse({ status: 404, description: 'Orden de trabajo no encontrada' })
-  @Roles(RoleEnum.LIDER_TECNICO, RoleEnum.JEFE_TALLER, RoleEnum.SOPORTE)
+  @Roles(RoleEnum.LIDER_TECNICO, RoleEnum.JEFE_TALLER,RoleEnum.ASESOR, RoleEnum.SOPORTE)
   assignTechnician(
     @Param('id') id: string,
     @Body() dto: AssignTechnicianDto,

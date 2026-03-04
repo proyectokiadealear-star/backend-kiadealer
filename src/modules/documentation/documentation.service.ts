@@ -10,6 +10,7 @@ import { VehiclesService } from '../vehicles/vehicles.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { CreateDocumentationDto } from './dto/create-documentation.dto';
 import { VehicleStatus } from '../../common/enums/vehicle-status.enum';
+import { AccessoryClassification } from '../../common/enums/accessory-key.enum';
 import { RoleEnum } from '../../common/enums/role.enum';
 import { AuthenticatedUser } from '../../common/interfaces/authenticated-user.interface';
 
@@ -81,10 +82,19 @@ export class DocumentationService {
         : Promise.resolve(null),
     ]);
 
+    // Si todos los accesorios son NO_APLICA, el vehículo pasa directo a LISTO_PARA_ENTREGA
+    const accessoriesList = Array.isArray(dto.accessories) ? dto.accessories : [];
+    const allAccessoriesNoAplica =
+      !isPending &&
+      accessoriesList.length > 0 &&
+      accessoriesList.every((a) => a.classification === AccessoryClassification.NO_APLICA);
+
     const now = this.firebase.serverTimestamp();
     const newStatus = isPending
       ? VehicleStatus.DOCUMENTACION_PENDIENTE
-      : VehicleStatus.DOCUMENTADO;
+      : allAccessoriesNoAplica
+        ? VehicleStatus.LISTO_PARA_ENTREGA
+        : VehicleStatus.DOCUMENTADO;
 
     const docData = {
       vehicleId,
@@ -120,27 +130,51 @@ export class DocumentationService {
     });
 
     if (!isPending) {
-      // Notificar a ASESOR y LIDER_TECNICO que hay un vehículo listo para accesorizar
-      await Promise.all([
-        this.notificationsService.notify({
-          type: 'ESTADO_CAMBIADO',
-          targetRole: RoleEnum.ASESOR,
-          targetSede: vehicle['sede'],
-          title: '📄 Vehículo documentado y listo para accesorizar',
-          body: `El vehículo ${vehicle['chassis']} ha sido documentado`,
-          vehicleId,
-          chassis: vehicle['chassis'] as string,
-        }),
-        this.notificationsService.notify({
-          type: 'ESTADO_CAMBIADO',
-          targetRole: RoleEnum.LIDER_TECNICO,
-          targetSede: vehicle['sede'],
-          title: '📄 Vehículo documentado y listo para accesorizar',
-          body: `El vehículo ${vehicle['chassis']} ha sido documentado`,
-          vehicleId,
-          chassis: vehicle['chassis'] as string,
-        }),
-      ]);
+      if (allAccessoriesNoAplica) {
+        // Todos los accesorios son NO_APLICA → directo a LISTO_PARA_ENTREGA
+        await Promise.all([
+          this.notificationsService.notify({
+            type: 'ESTADO_CAMBIADO',
+            targetRole: RoleEnum.ASESOR,
+            targetSede: vehicle['sede'],
+            title: '🚗 Vehículo listo para entrega',
+            body: `El vehículo ${vehicle['chassis']} fue documentado y está listo para entrega (sin accesorios pendientes)`,
+            vehicleId,
+            chassis: vehicle['chassis'] as string,
+          }),
+          this.notificationsService.notify({
+            type: 'ESTADO_CAMBIADO',
+            targetRole: RoleEnum.LIDER_TECNICO,
+            targetSede: vehicle['sede'],
+            title: '🚗 Vehículo listo para entrega',
+            body: `El vehículo ${vehicle['chassis']} fue documentado y está listo para entrega (sin accesorios pendientes)`,
+            vehicleId,
+            chassis: vehicle['chassis'] as string,
+          }),
+        ]);
+      } else {
+        // Tiene accesorios → notificar que está listo para accesorizar
+        await Promise.all([
+          this.notificationsService.notify({
+            type: 'ESTADO_CAMBIADO',
+            targetRole: RoleEnum.ASESOR,
+            targetSede: vehicle['sede'],
+            title: '📄 Vehículo documentado y listo para accesorizar',
+            body: `El vehículo ${vehicle['chassis']} ha sido documentado`,
+            vehicleId,
+            chassis: vehicle['chassis'] as string,
+          }),
+          this.notificationsService.notify({
+            type: 'ESTADO_CAMBIADO',
+            targetRole: RoleEnum.LIDER_TECNICO,
+            targetSede: vehicle['sede'],
+            title: '📄 Vehículo documentado y listo para accesorizar',
+            body: `El vehículo ${vehicle['chassis']} ha sido documentado`,
+            vehicleId,
+            chassis: vehicle['chassis'] as string,
+          }),
+        ]);
+      }
     } else {
       // Notificar a JEFE_TALLER que hay una documentación pendiente
       await this.notificationsService.notify({
