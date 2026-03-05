@@ -6,6 +6,7 @@ import {
   IsArray,
   ValidateNested,
   IsBoolean,
+  IsDateString,
   Matches,
 } from 'class-validator';
 import { Transform, Type, plainToInstance } from 'class-transformer';
@@ -138,4 +139,14 @@ export class CreateDocumentationDto {
   })
   @Type(() => String) // evita que class-transformer haga Boolean("false") = true antes del @Transform
   saveAsPending?: boolean;
+
+  @ApiPropertyOptional({
+    description:
+      'Fecha en que se recibió la matrícula del vehículo (ISO 8601). ' +
+      'Se registra cuando documentación recibe la matrícula física. Prerequisito para ENTREGADO.',
+    example: '2026-04-10',
+  })
+  @IsOptional()
+  @IsDateString()
+  registrationReceivedDate?: string;
 }

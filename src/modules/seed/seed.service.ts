@@ -498,13 +498,13 @@ export class SeedService {
         clientPhone:              v.clientPhone ?? null,
         paymentMethod:            v.paymentMethod ?? PaymentMethod.CREDITO,
         receptionDate:            ts,
-        certificationDate:        this.isAfterStatus(v.status, VehicleStatus.RECEPCIONADO)      ? ts : null,
-        documentationDate:        this.isAfterStatus(v.status, VehicleStatus.CERTIFICADO_STOCK) ? ts : null,
-        installationCompleteDate: this.isAfterStatus(v.status, VehicleStatus.DOCUMENTADO)       ? ts : null,
+        certificationDate:        this.isAfterStatus(v.status, VehicleStatus.DOCUMENTADO)       ? ts : null,
+        documentationDate:        this.isAfterStatus(v.status, VehicleStatus.ENVIADO_A_MATRICULAR) ? ts : null,
+        installationCompleteDate: this.isAfterStatus(v.status, VehicleStatus.CERTIFICADO_STOCK)  ? ts : null,
         deliveryDate:             v.status === VehicleStatus.ENTREGADO ? finalDeliveryDate : null,
         receivedBy:               jefeTallerUid,
-        certifiedBy:              this.isAfterStatus(v.status, VehicleStatus.RECEPCIONADO)      ? jefeTallerUid : null,
-        documentedBy:             this.isAfterStatus(v.status, VehicleStatus.CERTIFICADO_STOCK) ? jefeTallerUid : null,
+        certifiedBy:              this.isAfterStatus(v.status, VehicleStatus.DOCUMENTADO)       ? jefeTallerUid : null,
+        documentedBy:             this.isAfterStatus(v.status, VehicleStatus.ENVIADO_A_MATRICULAR) ? jefeTallerUid : null,
         installedBy:              this.isAfterStatus(v.status, VehicleStatus.EN_INSTALACION)    ? jefeTallerUid : null,
         deliveredBy:              v.status === VehicleStatus.ENTREGADO ? jefeTallerUid : null,
         createdAt:                ts,
@@ -572,7 +572,7 @@ export class SeedService {
       // Checklist técnico — estructura idéntica a certifications.service.ts
       radio:      'INSTALADO',
       rims: {
-        status:   'VIENE',
+        status:   'BUENOS',
         photoUrl: null,
       },
       seatType:   'CUERO',
@@ -754,10 +754,11 @@ export class SeedService {
   // HELPERS
   // ──────────────────────────────────────────────────────────────────────
   private readonly STATUS_ORDER: VehicleStatus[] = [
-    VehicleStatus.RECEPCIONADO,
-    VehicleStatus.CERTIFICADO_STOCK,
+    VehicleStatus.POR_ARRIBAR,
+    VehicleStatus.ENVIADO_A_MATRICULAR,
     VehicleStatus.DOCUMENTACION_PENDIENTE,
     VehicleStatus.DOCUMENTADO,
+    VehicleStatus.CERTIFICADO_STOCK,
     VehicleStatus.ORDEN_GENERADA,
     VehicleStatus.ASIGNADO,
     VehicleStatus.EN_INSTALACION,

@@ -75,7 +75,7 @@ describe('ServiceOrdersService', () => {
     it('should throw BadRequestException if vehicle status is not DOCUMENTADO', async () => {
       vehiclesService.assertExists = jest.fn().mockResolvedValue({
         id: 'v1',
-        status: VehicleStatus.RECEPCIONADO,
+        status: VehicleStatus.POR_ARRIBAR,
         sede: SedeEnum.SURMOTOR,
       });
 

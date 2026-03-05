@@ -1,10 +1,11 @@
-import { IsEnum, IsNumber, IsOptional, IsString, Min } from 'class-validator';
+import { IsEnum, IsNumber, IsOptional, IsString, Min, IsNotEmpty } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { Transform } from 'class-transformer';
 
 export enum RimsStatus {
-  VIENE = 'VIENE',
-  RAYADOS = 'RAYADOS',
-  NO_VINIERON = 'NO_VINIERON',
+  BUENOS = 'BUENOS',
+  CON_DEFECTOS = 'CON_DEFECTOS',
+  AUSENTES = 'AUSENTES',
 }
 export enum SeatType {
   CUERO = 'CUERO',
@@ -36,7 +37,7 @@ export class CreateCertificationDto {
   @ApiProperty({
     enum: RimsStatus,
     description: 'Estado de los aros. Si se envía como multipart/form-data, adjuntar foto en el field «rims Photo».',
-    example: RimsStatus.VIENE,
+    example: RimsStatus.BUENOS,
   })
   @IsEnum(RimsStatus)
   rimsStatus: RimsStatus;
@@ -89,4 +90,21 @@ export class CreateCertificationDto {
   @IsOptional()
   @IsString()
   notes?: string;
+
+  @ApiProperty({
+    description: 'Concesionario de origen del vehículo (se guarda en mayúsculas en el vehículo)',
+    example: 'QUITO MOTORS',
+  })
+  @IsString()
+  @IsNotEmpty()
+  @Transform(({ value }) => typeof value === 'string' ? value.toUpperCase() : value)
+  originConcessionaire: string;
+
+  @ApiPropertyOptional({
+    description:
+      'Foto del vehículo en Base64. Se sube a Storage como la foto principal del vehículo en vehicles/{id}/photo.jpg',
+  })
+  @IsOptional()
+  @IsString()
+  vehiclePhotoBase64?: string;
 }

@@ -91,7 +91,7 @@ describe('CertificationsService', () => {
   it('should send KILOMETRAJE_ALTO notification when mileage > 10', async () => {
     vehiclesService.assertExists = jest.fn().mockResolvedValue({
       id: 'v1',
-      status: VehicleStatus.RECEPCIONADO,
+      status: VehicleStatus.DOCUMENTADO,
       sede: SedeEnum.SURMOTOR,
     });
 
@@ -116,7 +116,7 @@ describe('CertificationsService', () => {
   it('should send SIN_IMPRONTAS notification when imprints are missing', async () => {
     vehiclesService.assertExists = jest.fn().mockResolvedValue({
       id: 'v1',
-      status: VehicleStatus.RECEPCIONADO,
+      status: VehicleStatus.DOCUMENTADO,
       sede: SedeEnum.SURMOTOR,
     });
 

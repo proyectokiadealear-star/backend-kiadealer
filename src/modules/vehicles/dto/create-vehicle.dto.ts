@@ -2,14 +2,18 @@ import {
   IsString,
   IsNotEmpty,
   IsNumber,
-  IsOptional,
   Matches,
   Min,
   Max,
 } from 'class-validator';
 import { Transform } from 'class-transformer';
-import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { ApiProperty } from '@nestjs/swagger';
 
+/**
+ * DTO para el registro contable del vehículo (estado POR_ARRIBAR).
+ * Solo datos de inventario. La foto y el concesionario de origen
+ * se registran en la etapa de certificación física.
+ */
 export class CreateVehicleDto {
   @ApiProperty({
     description:
@@ -57,23 +61,5 @@ export class CreateVehicleDto {
   @Transform(({ value }) => (typeof value === 'string' ? value.toUpperCase().trim() : value))
   color: string;
 
-  @ApiProperty({
-    description: 'Concesionario de origen del vehículo (selector desde catálogo). Se almacena en MAYUSCULAS.',
-    example: 'LOGIMANTA',
-  })
-  @IsString()
-  @IsNotEmpty()
-  @Transform(({ value }) => (typeof value === 'string' ? value.toUpperCase().trim() : value))
-  originConcessionaire: string;
-
   // sede NO se recibe del cliente — se asigna automáticamente desde el claim del usuario (user.sede)
-
-  @ApiPropertyOptional({
-    description:
-      'Foto del vehículo en base64 (alternativa a multipart). Si se envía como multipart/form-data, usar el field «photo».',
-    example: 'data:image/jpeg;base64,/9j/4AAQSkZJRg...',
-  })
-  @IsOptional()
-  @IsString()
-  photoBase64?: string;
 }

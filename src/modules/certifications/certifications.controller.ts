@@ -7,10 +7,10 @@
   Param,
   Body,
   UseGuards,
-  UploadedFile,
+  UploadedFiles,
   UseInterceptors,
 } from '@nestjs/common';
-import { FileInterceptor } from '@nestjs/platform-express';
+import { FileFieldsInterceptor } from '@nestjs/platform-express';
 import {
   ApiBearerAuth,
   ApiBody,
@@ -41,25 +41,37 @@ export class CertificationsController {
   @ApiOperation({
     summary: 'Registrar certificación interna/externa del vehículo',
     description:
-      'El vehículo debe estar en estado RECEPCIONADO. Sube la foto de aros a Firebase Storage y cambia el estado a CERTIFICADO_STOCK. Dispara notificaciones condicionales por kilometraje alto y falta de improntas. **Roles:** ASESOR, LIDER_TECNICO, PERSONAL_TALLER, JEFE_TALLER, SOPORTE',
+      'El vehículo debe estar en estado DOCUMENTADO. Sube la foto del vehículo y la foto de aros a Firebase Storage y cambia el estado a CERTIFICADO_STOCK. Guarda originConcessionaire y receptionDate en el vehículo. Dispara notificaciones condicionales por kilometraje alto y falta de improntas. **Roles:** ASESOR, LIDER_TECNICO, PERSONAL_TALLER, JEFE_TALLER, SOPORTE',
   })
   @ApiParam({ name: 'vehicleId', description: 'ID del vehículo a certificar (UUID)' })
   @ApiConsumes('multipart/form-data', 'application/json')
   @ApiBody({ type: CreateCertificationDto })
   @ApiResponse({ status: 201, description: 'Certificación registrada y vehículo en CERTIFICADO_STOCK' })
-  @ApiResponse({ status: 400, description: 'Vehículo no está en RECEPCIONADO o ya tiene certificación' })
+  @ApiResponse({ status: 400, description: 'Vehículo no está en DOCUMENTADO o ya tiene certificación' })
   @ApiResponse({ status: 401, description: 'Token inválido o ausente' })
   @ApiResponse({ status: 403, description: 'Rol no autorizado' })
   @ApiResponse({ status: 404, description: 'Vehículo no encontrado' })
   @Roles(RoleEnum.ASESOR, RoleEnum.LIDER_TECNICO, RoleEnum.PERSONAL_TALLER, RoleEnum.JEFE_TALLER, RoleEnum.SOPORTE)
-  @UseInterceptors(FileInterceptor('rimsPhoto'))
+  @UseInterceptors(
+    FileFieldsInterceptor([
+      { name: 'vehiclePhoto', maxCount: 1 },
+      { name: 'rimsPhoto', maxCount: 1 },
+    ]),
+  )
   create(
     @Param('vehicleId') vehicleId: string,
     @Body() dto: CreateCertificationDto,
     @CurrentUser() user: AuthenticatedUser,
-    @UploadedFile() rimsPhoto?: Express.Multer.File,
+    @UploadedFiles()
+    files?: {
+      vehiclePhoto?: Express.Multer.File[];
+      rimsPhoto?: Express.Multer.File[];
+    },
   ) {
-    return this.svc.create(vehicleId, dto, user, rimsPhoto);
+    return this.svc.create(vehicleId, dto, user, {
+      vehiclePhoto: files?.vehiclePhoto?.[0],
+      rimsPhoto: files?.rimsPhoto?.[0],
+    });
   }
 
   // ── READ ────────────────────────────────────────────────────────
@@ -80,7 +92,7 @@ export class CertificationsController {
   @ApiOperation({
     summary: 'Editar certificación',
     description:
-      'Permite corregir cualquier campo de la certificación, incluyendo la foto de aros. Si se envía una nueva foto, la anterior es eliminada de Storage. No re-dispara notificaciones. **Roles:** JEFE_TALLER, SOPORTE',
+      'Permite corregir cualquier campo de la certificación, incluyendo la foto del vehículo y la foto de aros. Si se envía una nueva foto, la anterior es eliminada de Storage. No re-dispara notificaciones. **Roles:** JEFE_TALLER, SOPORTE',
   })
   @ApiParam({ name: 'vehicleId', description: 'ID del vehículo (UUID)' })
   @ApiConsumes('multipart/form-data', 'application/json')
@@ -88,24 +100,36 @@ export class CertificationsController {
   @ApiResponse({ status: 200, description: 'Certificación actualizada' })
   @ApiResponse({ status: 403, description: 'Rol no autorizado' })
   @ApiResponse({ status: 404, description: 'Certificación no encontrada' })
-  @Roles(RoleEnum.JEFE_TALLER, RoleEnum.SOPORTE)
-  @UseInterceptors(FileInterceptor('rimsPhoto'))
+  @Roles(RoleEnum.DOCUMENTACION, RoleEnum.JEFE_TALLER, RoleEnum.SOPORTE)
+  @UseInterceptors(
+    FileFieldsInterceptor([
+      { name: 'vehiclePhoto', maxCount: 1 },
+      { name: 'rimsPhoto', maxCount: 1 },
+    ]),
+  )
   update(
     @Param('vehicleId') vehicleId: string,
     @Body() dto: Partial<CreateCertificationDto>,
-    @UploadedFile() rimsPhoto?: Express.Multer.File,
+    @UploadedFiles()
+    files?: {
+      vehiclePhoto?: Express.Multer.File[];
+      rimsPhoto?: Express.Multer.File[];
+    },
   ) {
-    return this.svc.update(vehicleId, dto, rimsPhoto);
+    return this.svc.update(vehicleId, dto, {
+      vehiclePhoto: files?.vehiclePhoto?.[0],
+      rimsPhoto: files?.rimsPhoto?.[0],
+    });
   }
 
   // ── DELETE ──────────────────────────────────────────────────────
   @Delete(':vehicleId')
   @ApiOperation({
     summary: 'Eliminar certificación',
-    description: 'Elimina la certificación y revierte el vehículo a RECEPCIONADO con nota en el historial de estados. **Roles:** JEFE_TALLER, SOPORTE',
+    description: 'Elimina la certificación y revierte el vehículo a DOCUMENTADO con nota en el historial de estados. **Roles:** JEFE_TALLER, SOPORTE',
   })
   @ApiParam({ name: 'vehicleId', description: 'ID del vehículo (UUID)' })
-  @ApiResponse({ status: 200, description: 'Certificación eliminada y vehículo revertido a RECEPCIONADO' })
+  @ApiResponse({ status: 200, description: 'Certificación eliminada y vehículo revertido a DOCUMENTADO' })
   @ApiResponse({ status: 403, description: 'Rol no autorizado' })
   @ApiResponse({ status: 404, description: 'Certificación no encontrada' })
   @Roles(RoleEnum.JEFE_TALLER, RoleEnum.SOPORTE)

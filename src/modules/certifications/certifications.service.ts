@@ -30,13 +30,16 @@ export class CertificationsService {
     vehicleId: string,
     dto: CreateCertificationDto,
     user: AuthenticatedUser,
-    rimsPhotoFile?: Express.Multer.File,
+    files?: {
+      vehiclePhoto?: Express.Multer.File;
+      rimsPhoto?: Express.Multer.File;
+    },
   ) {
     const vehicle = await this.vehiclesService.assertExists(vehicleId);
 
-    if (vehicle['status'] !== VehicleStatus.RECEPCIONADO) {
+    if (vehicle['status'] !== VehicleStatus.DOCUMENTADO) {
       throw new BadRequestException(
-        `El vehículo debe estar en estado RECEPCIONADO para certificar. Estado actual: ${vehicle['status']}`,
+        `El vehículo debe estar en estado DOCUMENTADO para certificar. Estado actual: ${vehicle['status']}`,
       );
     }
 
@@ -47,11 +50,24 @@ export class CertificationsService {
     }
 
     let rimsPhotoUrl: string | null = null;
+    let vehiclePhotoUrl: string | null = null;
+
+    // Subir foto del vehículo si viene como archivo o base64
+    if (files?.vehiclePhoto) {
+      const vPhotoPath = `vehicles/${vehicleId}/photo.jpg`;
+      await this.firebase.uploadBuffer(files.vehiclePhoto.buffer, vPhotoPath, files.vehiclePhoto.mimetype);
+      vehiclePhotoUrl = await this.firebase.getSignedUrl(vPhotoPath);
+    } else if (dto.vehiclePhotoBase64) {
+      const vPhotoPath = `vehicles/${vehicleId}/photo.jpg`;
+      const buffer = Buffer.from(dto.vehiclePhotoBase64, 'base64');
+      await this.firebase.uploadBuffer(buffer, vPhotoPath, 'image/jpeg');
+      vehiclePhotoUrl = await this.firebase.getSignedUrl(vPhotoPath);
+    }
 
     // Subir foto de aros si viene
-    if (rimsPhotoFile) {
+    if (files?.rimsPhoto) {
       const storagePath = `vehicles/${vehicleId}/rims-photo.jpg`;
-      await this.firebase.uploadBuffer(rimsPhotoFile.buffer, storagePath, rimsPhotoFile.mimetype);
+      await this.firebase.uploadBuffer(files.rimsPhoto.buffer, storagePath, files.rimsPhoto.mimetype);
       rimsPhotoUrl = await this.firebase.getSignedUrl(storagePath);
     }
 
@@ -75,11 +91,14 @@ export class CertificationsService {
 
     await this.db.collection('certifications').doc(vehicleId).set(certData);
 
-    // Cambiar estado del vehículo a CERTIFICADO_STOCK
+    // Cambiar estado del vehículo a CERTIFICADO_STOCK + guardar datos de recepción
     await this.vehiclesService.changeStatus(vehicleId, VehicleStatus.CERTIFICADO_STOCK, user, {
       extraFields: {
         certificationDate: now,
         certifiedBy: user.uid,
+        originConcessionaire: dto.originConcessionaire,
+        receptionDate: now,
+        ...(vehiclePhotoUrl && { photoUrl: vehiclePhotoUrl }),
       },
     });
 
@@ -139,13 +158,13 @@ export class CertificationsService {
       ]);
     }
 
-    // Notificar a DOCUMENTACION que hay un vehículo listo para documentar
+    // Notificar a ASESOR / LIDER_TECNICO que el vehículo está certificado (listo para OT)
     await this.notificationsService.notify({
       type: 'ESTADO_CAMBIADO',
-      targetRole: RoleEnum.DOCUMENTACION,
+      targetRole: RoleEnum.ASESOR,
       targetSede: vehicle['sede'],
-      title: '✅ Vehículo certificado y listo para documentar',
-      body: `El vehículo ${vehicle['chassis']} está en estado Certificado en Stock`,
+      title: '✅ Vehículo certificado en stock',
+      body: `El vehículo ${vehicle['chassis']} está certificado y listo para generar OT`,
       vehicleId,
       chassis: vehicle['chassis'] as string,
     });
@@ -182,7 +201,10 @@ export class CertificationsService {
   async update(
     vehicleId: string,
     dto: Partial<CreateCertificationDto>,
-    rimsPhotoFile?: Express.Multer.File,
+    files?: {
+      vehiclePhoto?: Express.Multer.File;
+      rimsPhoto?: Express.Multer.File;
+    },
   ) {
     const doc = await this.db.collection('certifications').doc(vehicleId).get();
     if (!doc.exists) throw new NotFoundException('Certificación no encontrada');
@@ -192,11 +214,35 @@ export class CertificationsService {
       updatedAt: this.firebase.serverTimestamp(),
     };
 
+    // Reemplazar foto del vehículo si se recibe nueva
+    if (files?.vehiclePhoto) {
+      const vPhotoPath = `vehicles/${vehicleId}/photo.jpg`;
+      await this.firebase.deleteFile(vPhotoPath).catch(() => {});
+      await this.firebase.uploadBuffer(files.vehiclePhoto.buffer, vPhotoPath, files.vehiclePhoto.mimetype);
+      const newVUrl = await this.firebase.getSignedUrl(vPhotoPath);
+      // Actualizar photoUrl en el vehículo
+      await this.db.collection('vehicles').doc(vehicleId).update({ photoUrl: newVUrl });
+    } else if (dto.vehiclePhotoBase64) {
+      const vPhotoPath = `vehicles/${vehicleId}/photo.jpg`;
+      await this.firebase.deleteFile(vPhotoPath).catch(() => {});
+      const buffer = Buffer.from(dto.vehiclePhotoBase64, 'base64');
+      await this.firebase.uploadBuffer(buffer, vPhotoPath, 'image/jpeg');
+      const newVUrl = await this.firebase.getSignedUrl(vPhotoPath);
+      await this.db.collection('vehicles').doc(vehicleId).update({ photoUrl: newVUrl });
+    }
+    // Limpiar vehiclePhotoBase64 del update de certificación (no se guarda en cert doc)
+    delete updates['vehiclePhotoBase64'];
+
+    // Actualizar originConcessionaire en el vehículo si viene
+    if (dto.originConcessionaire) {
+      await this.db.collection('vehicles').doc(vehicleId).update({ originConcessionaire: dto.originConcessionaire });
+    }
+
     // Reemplazar foto de aros si se recibe nueva
-    if (rimsPhotoFile) {
+    if (files?.rimsPhoto) {
       const storagePath = `vehicles/${vehicleId}/rims-photo.jpg`;
-      await this.firebase.deleteFile(storagePath);
-      await this.firebase.uploadBuffer(rimsPhotoFile.buffer, storagePath, rimsPhotoFile.mimetype);
+      await this.firebase.deleteFile(storagePath).catch(() => {});
+      await this.firebase.uploadBuffer(files.rimsPhoto.buffer, storagePath, files.rimsPhoto.mimetype);
       const newUrl = await this.firebase.getSignedUrl(storagePath);
       updates['rims'] = { ...(doc.data()?.['rims'] ?? {}), photoUrl: newUrl };
     }
@@ -210,15 +256,15 @@ export class CertificationsService {
     if (!doc.exists) throw new NotFoundException('Certificación no encontrada');
 
     // Eliminar foto de aros de Firebase Storage
-    await this.firebase.deleteFile(`vehicles/${vehicleId}/rims-photo.jpg`);
+    await this.firebase.deleteFile(`vehicles/${vehicleId}/rims-photo.jpg`).catch(() => {});
 
     // Eliminar el documento de certificación
     await this.db.collection('certifications').doc(vehicleId).delete();
 
-    // Revertir el vehículo a RECEPCIONADO para que pueda ser re-certificado
+    // Revertir el vehículo a DOCUMENTADO para que pueda ser re-certificado
     await this.vehiclesService.changeStatus(
       vehicleId,
-      VehicleStatus.RECEPCIONADO,
+      VehicleStatus.DOCUMENTADO,
       user,
       {
         notes: 'Certificación eliminada por JEFE_TALLER/SOPORTE — requiere re-certificación',

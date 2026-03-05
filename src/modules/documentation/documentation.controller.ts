@@ -23,6 +23,8 @@ import {
 import { IsEnum, IsString, IsNotEmpty } from 'class-validator';
 import { DocumentationService } from './documentation.service';
 import { CreateDocumentationDto } from './dto/create-documentation.dto';
+import { SendToRegistrationDto } from './dto/send-to-registration.dto';
+import { ReceiveRegistrationDto } from './dto/receive-registration.dto';
 import { FirebaseAuthGuard } from '../../common/guards/firebase-auth.guard';
 import { RolesGuard } from '../../common/guards/roles.guard';
 import { Roles } from '../../common/decorators/roles.decorator';
@@ -96,7 +98,7 @@ export class DocumentationController {
   @ApiConsumes('multipart/form-data')
   @ApiBody({ type: CreateDocumentationMultipartDto })
   @ApiResponse({ status: 201, description: 'Documentación registrada. Estado: DOCUMENTADO o DOCUMENTACION_PENDIENTE' })
-  @ApiResponse({ status: 400, description: 'Vehículo no está en CERTIFICADO_STOCK o DOCUMENTACION_PENDIENTE' })
+  @ApiResponse({ status: 400, description: 'Vehículo no está en ENVIADO_A_MATRICULAR o DOCUMENTACION_PENDIENTE' })
   @ApiResponse({ status: 401, description: 'Token inválido o ausente' })
   @ApiResponse({ status: 403, description: 'Rol no autorizado' })
   @ApiResponse({ status: 404, description: 'Vehículo no encontrado' })
@@ -124,6 +126,46 @@ export class DocumentationController {
       giftEmail: files?.giftEmail?.[0],
       accessoryInvoice: files?.accessoryInvoice?.[0],
     });
+  }
+
+  // ── SEND TO REGISTRATION ───────────────────────────────────────
+  @Patch(':vehicleId/send-to-registration')
+  @ApiOperation({
+    summary: 'Enviar vehículo a matriculación',
+    description:
+      'Transición POR_ARRIBAR → ENVIADO_A_MATRICULAR. Guarda la fecha de envío. **Roles:** DOCUMENTACION, JEFE_TALLER, SOPORTE',
+  })
+  @ApiParam({ name: 'vehicleId', description: 'ID del vehículo (UUID)' })
+  @ApiResponse({ status: 200, description: 'Vehículo enviado a matricular (ENVIADO_A_MATRICULAR)' })
+  @ApiResponse({ status: 400, description: 'Vehículo no está en POR_ARRIBAR' })
+  @ApiResponse({ status: 404, description: 'Vehículo no encontrado' })
+  @Roles(RoleEnum.DOCUMENTACION, RoleEnum.JEFE_TALLER, RoleEnum.SOPORTE)
+  sendToRegistration(
+    @Param('vehicleId') vehicleId: string,
+    @Body() dto: SendToRegistrationDto,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.svc.sendToRegistration(vehicleId, dto.registrationSentDate, user);
+  }
+
+  // ── RECEIVE REGISTRATION ─────────────────────────────────────────
+  @Patch(':vehicleId/receive-registration')
+  @ApiOperation({
+    summary: 'Registrar recepción de matrícula',
+    description:
+      'Guarda la fecha en que se recibió la matrícula del vehículo. No cambia el estado. **Roles:** DOCUMENTACION, JEFE_TALLER, SOPORTE',
+  })
+  @ApiParam({ name: 'vehicleId', description: 'ID del vehículo (UUID)' })
+  @ApiResponse({ status: 200, description: 'Fecha de recepción registrada' })
+  @ApiResponse({ status: 400, description: 'Vehículo no está en ENVIADO_A_MATRICULAR' })
+  @ApiResponse({ status: 404, description: 'Vehículo no encontrado' })
+  @Roles(RoleEnum.DOCUMENTACION, RoleEnum.JEFE_TALLER, RoleEnum.SOPORTE)
+  receiveRegistration(
+    @Param('vehicleId') vehicleId: string,
+    @Body() dto: ReceiveRegistrationDto,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.svc.receiveRegistration(vehicleId, dto.registrationReceivedDate, user);
   }
 
   // ── READ ────────────────────────────────────────────────────────

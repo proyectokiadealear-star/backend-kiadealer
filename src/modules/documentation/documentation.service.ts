@@ -40,10 +40,10 @@ export class DocumentationService {
   ) {
     const vehicle = await this.vehiclesService.assertExists(vehicleId);
 
-    const allowedStatuses = [VehicleStatus.CERTIFICADO_STOCK, VehicleStatus.DOCUMENTACION_PENDIENTE];
+    const allowedStatuses = [VehicleStatus.ENVIADO_A_MATRICULAR, VehicleStatus.DOCUMENTACION_PENDIENTE];
     if (!allowedStatuses.includes(vehicle['status'] as VehicleStatus)) {
       throw new BadRequestException(
-        `El vehículo debe estar certificado para documentar. Estado actual: ${vehicle['status']}`,
+        `El vehículo debe estar en ENVIADO_A_MATRICULAR o DOCUMENTACION_PENDIENTE para documentar. Estado actual: ${vehicle['status']}`,
       );
     }
 
@@ -109,6 +109,7 @@ export class DocumentationService {
       accessories: Array.isArray(dto.accessories)
         ? JSON.parse(JSON.stringify(dto.accessories))
         : dto.accessories,
+      registrationReceivedDate: dto.registrationReceivedDate ?? null,
       documentationStatus: isPending ? 'PENDIENTE' : 'COMPLETO',
       documentedAt: isPending ? null : now,
       documentedBy: user.uid,
@@ -191,6 +192,73 @@ export class DocumentationService {
     this.logger.log(`Documentación ${isPending ? 'pendiente' : 'completada'} para vehículo ${vehicleId}`);
 
     return { vehicleId, newStatus, documentationDate: isPending ? null : new Date().toISOString() };
+  }
+
+  /**
+   * Transición POR_ARRIBAR → ENVIADO_A_MATRICULAR.
+   * Guarda la fecha de envío a matriculación en el vehículo.
+   */
+  async sendToRegistration(
+    vehicleId: string,
+    registrationSentDate: string,
+    user: AuthenticatedUser,
+  ) {
+    const vehicle = await this.vehiclesService.assertExists(vehicleId);
+
+    if (vehicle['status'] !== VehicleStatus.POR_ARRIBAR) {
+      throw new BadRequestException(
+        `El vehículo debe estar en POR_ARRIBAR para enviar a matricular. Estado actual: ${vehicle['status']}`,
+      );
+    }
+
+    await this.vehiclesService.changeStatus(
+      vehicleId,
+      VehicleStatus.ENVIADO_A_MATRICULAR,
+      user,
+      {
+        notes: `Enviado a matricular por ${user.displayName ?? user.email}`,
+        extraFields: { registrationSentDate },
+      },
+    );
+
+    await this.notificationsService.notify({
+      type: 'ESTADO_CAMBIADO',
+      targetRole: RoleEnum.DOCUMENTACION,
+      targetSede: vehicle['sede'],
+      title: '📋 Vehículo enviado a matricular',
+      body: `El vehículo ${vehicle['chassis']} fue enviado a matriculación`,
+      vehicleId,
+      chassis: vehicle['chassis'] as string,
+    });
+
+    this.logger.log(`Vehículo ${vehicleId} enviado a matricular por ${user.uid}`);
+    return { vehicleId, newStatus: VehicleStatus.ENVIADO_A_MATRICULAR, registrationSentDate };
+  }
+
+  /**
+   * Registra la fecha de recepción de matrícula en el vehículo.
+   * No cambia el estado — el vehículo permanece en ENVIADO_A_MATRICULAR.
+   */
+  async receiveRegistration(
+    vehicleId: string,
+    registrationReceivedDate: string,
+    user: AuthenticatedUser,
+  ) {
+    const vehicle = await this.vehiclesService.assertExists(vehicleId);
+
+    if (vehicle['status'] !== VehicleStatus.ENVIADO_A_MATRICULAR) {
+      throw new BadRequestException(
+        `El vehículo debe estar en ENVIADO_A_MATRICULAR para recibir matrícula. Estado actual: ${vehicle['status']}`,
+      );
+    }
+
+    await this.db.collection('vehicles').doc(vehicleId).update({
+      registrationReceivedDate,
+      updatedAt: this.firebase.serverTimestamp(),
+    });
+
+    this.logger.log(`Matrícula recibida para vehículo ${vehicleId} por ${user.uid}`);
+    return { vehicleId, registrationReceivedDate };
   }
 
   async findOne(vehicleId: string) {

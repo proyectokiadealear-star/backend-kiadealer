@@ -12,6 +12,7 @@
   UseInterceptors,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
+// FileInterceptor se usa solo en PATCH (update) — POST ya no sube foto
 import {
   ApiBearerAuth,
   ApiBody,
@@ -43,23 +44,25 @@ export class VehiclesController {
   // ── CREATE ──────────────────────────────────────────────────────
   @Post()
   @ApiOperation({
-    summary: 'Ingresar vehículo al taller',
-    description: 'Crea el registro del vehículo con estado RECEPCIONADO. La sede se asigna automáticamente del claim del token. **Roles:** ASESOR, LIDER_TECNICO, PERSONAL_TALLER, JEFE_TALLER, SOPORTE',
+    summary: 'Registrar vehículo (inventario contable)',
+    description:
+      'Crea el registro contable del vehículo con estado POR_ARRIBAR. ' +
+      'Solo requiere datos de inventario (chasis, modelo, año, color). ' +
+      'La foto y el concesionario de origen se registran en la certificación física. ' +
+      'La sede se asigna automáticamente del claim del token. **Roles:** ASESOR, LIDER_TECNICO, PERSONAL_TALLER, JEFE_TALLER, SOPORTE',
   })
-  @ApiConsumes('multipart/form-data', 'application/json')
+  @ApiConsumes('application/json')
   @ApiBody({ type: CreateVehicleDto })
-  @ApiResponse({ status: 201, description: 'Vehículo creado exitosamente con estado RECEPCIONADO' })
+  @ApiResponse({ status: 201, description: 'Vehículo registrado con estado POR_ARRIBAR' })
   @ApiResponse({ status: 400, description: 'Chasis duplicado o año inválido' })
   @ApiResponse({ status: 401, description: 'Token inválido o ausente' })
   @ApiResponse({ status: 403, description: 'Rol no autorizado' })
   @Roles(RoleEnum.ASESOR, RoleEnum.LIDER_TECNICO, RoleEnum.PERSONAL_TALLER, RoleEnum.JEFE_TALLER, RoleEnum.SOPORTE)
-  @UseInterceptors(FileInterceptor('photo'))
   create(
     @Body() dto: CreateVehicleDto,
     @CurrentUser() user: AuthenticatedUser,
-    @UploadedFile() photo?: Express.Multer.File,
   ) {
-    return this.svc.create(dto, user, photo);
+    return this.svc.create(dto, user);
   }
 
   // ── STATS ───────────────────────────────────────────────────────
@@ -102,6 +105,46 @@ export class VehiclesController {
     return this.svc.findAll(query, user);
   }
 
+  // ── SALE POTENTIAL (BATCH) ────────────────────────────────────────
+  @Post('sale-potential-batch')
+  @ApiOperation({
+    summary: 'Potencial de venta en batch (múltiples vehículos)',
+    description:
+      'Calcula el potencial de venta de accesorios para múltiples vehículos en una sola llamada. ' +
+      'Usa un único scan de la colección en vez de N scans individuales. Máximo 50 IDs. ' +
+      '**Roles:** ASESOR, LIDER_TECNICO, JEFE_TALLER, SOPORTE',
+  })
+  @ApiBody({
+    schema: {
+      type: 'object',
+      properties: { vehicleIds: { type: 'array', items: { type: 'string' }, maxItems: 50 } },
+      required: ['vehicleIds'],
+    },
+  })
+  @ApiResponse({ status: 200, description: 'Array de potenciales de venta para cada vehículo' })
+  @Roles(RoleEnum.ASESOR, RoleEnum.LIDER_TECNICO, RoleEnum.JEFE_TALLER, RoleEnum.SOPORTE)
+  getSalePotentialBatch(@Body() body: { vehicleIds: string[] }) {
+    return this.svc.getSalePotentialBatch(body.vehicleIds ?? []);
+  }
+
+  // ── SALE POTENTIAL ──────────────────────────────────────────────
+  @Get(':id/sale-potential')
+  @ApiOperation({
+    summary: 'Potencial de venta de accesorios del vehículo',
+    description:
+      'Calcula el porcentaje de accesorios vendidos/obsequiados vs los 13 disponibles (excluye «otros»). ' +
+      'Incluye un potencial ponderado basado en el algoritmo de predicción y lista de oportunidades altas (prob. ≥ 40%). ' +
+      '**Roles:** ASESOR, LIDER_TECNICO, JEFE_TALLER, SOPORTE',
+  })
+  @ApiParam({ name: 'id', description: 'ID del vehículo (UUID)' })
+  @ApiResponse({ status: 200, description: 'Potencial de venta con desglose y predicciones' })
+  @ApiResponse({ status: 400, description: 'El vehículo no tiene documentación registrada' })
+  @ApiResponse({ status: 404, description: 'Vehículo no encontrado' })
+  @Roles(RoleEnum.ASESOR, RoleEnum.LIDER_TECNICO, RoleEnum.JEFE_TALLER, RoleEnum.SOPORTE)
+  getSalePotential(@Param('id') id: string) {
+    return this.svc.getSalePotential(id);
+  }
+
   // ── FIND ONE ────────────────────────────────────────────────────
   @Get(':id')
   @ApiOperation({
@@ -142,7 +185,7 @@ export class VehiclesController {
   @ApiResponse({ status: 200, description: 'Vehículo actualizado' })
   @ApiResponse({ status: 403, description: 'Rol no autorizado' })
   @ApiResponse({ status: 404, description: 'Vehículo no encontrado' })
-  @Roles(RoleEnum.JEFE_TALLER, RoleEnum.SOPORTE)
+  @Roles(RoleEnum.DOCUMENTACION, RoleEnum.JEFE_TALLER, RoleEnum.SOPORTE)
   @UseInterceptors(FileInterceptor('photo'))
   update(
     @Param('id') id: string,

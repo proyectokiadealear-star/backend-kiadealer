@@ -44,9 +44,9 @@ export class ServiceOrdersService {
   async create(dto: CreateServiceOrderDto, user: AuthenticatedUser) {
     const vehicle = await this.vehiclesService.assertExists(dto.vehicleId);
 
-    if (vehicle['status'] !== VehicleStatus.DOCUMENTADO) {
+    if (vehicle['status'] !== VehicleStatus.CERTIFICADO_STOCK) {
       throw new BadRequestException(
-        `El vehículo debe estar DOCUMENTADO para generar OT. Estado actual: ${vehicle['status']}`,
+        `El vehículo debe estar CERTIFICADO_STOCK para generar OT. Estado actual: ${vehicle['status']}`,
       );
     }
 

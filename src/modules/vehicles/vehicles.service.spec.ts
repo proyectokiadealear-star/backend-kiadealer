@@ -163,7 +163,7 @@ describe('VehiclesService', () => {
       const vehicleData = {
         id: 'v1',
         chassis: 'XYZ',
-        status: VehicleStatus.RECEPCIONADO,
+        status: VehicleStatus.POR_ARRIBAR,
       };
       firebase.firestore = jest.fn().mockReturnValue({
         collection: jest.fn().mockReturnValue({
@@ -179,7 +179,7 @@ describe('VehiclesService', () => {
   // ── changeStatus() ──────────────────────────────────────────────────────────
   describe('changeStatus()', () => {
     it('should update the vehicle status', async () => {
-      const vehicleData = { id: 'v1', status: VehicleStatus.RECEPCIONADO, sede: SedeEnum.SURMOTOR };
+      const vehicleData = { id: 'v1', status: VehicleStatus.POR_ARRIBAR, sede: SedeEnum.SURMOTOR };
       const ref = mockDocRef(vehicleData);
       firebase.firestore = jest.fn().mockReturnValue({
         collection: jest.fn().mockReturnValue({
