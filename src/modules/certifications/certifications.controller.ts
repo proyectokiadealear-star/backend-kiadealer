@@ -100,7 +100,7 @@ export class CertificationsController {
   @ApiResponse({ status: 200, description: 'Certificación actualizada' })
   @ApiResponse({ status: 403, description: 'Rol no autorizado' })
   @ApiResponse({ status: 404, description: 'Certificación no encontrada' })
-  @Roles(RoleEnum.DOCUMENTACION, RoleEnum.JEFE_TALLER, RoleEnum.SOPORTE)
+  @Roles(RoleEnum.DOCUMENTACION, RoleEnum.ASESOR, RoleEnum.LIDER_TECNICO, RoleEnum.JEFE_TALLER, RoleEnum.SOPORTE)
   @UseInterceptors(
     FileFieldsInterceptor([
       { name: 'vehiclePhoto', maxCount: 1 },
