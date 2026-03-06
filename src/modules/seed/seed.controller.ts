@@ -129,4 +129,23 @@ export class SeedController {
       clear: clear === 'true',
     });
   }
+
+  /**
+   * POST /seed/reset-to-por-arribar
+   *
+   * Resetea todos los vehículos en CERTIFICADO_STOCK → POR_ARRIBAR
+   * sin eliminar el vehículo. Limpia certificaciones y documentaciones asociadas.
+   */
+  @Post('reset-to-por-arribar')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Reset vehículos CERTIFICADO_STOCK → POR_ARRIBAR',
+    description:
+      'Encuentra todos los vehículos en CERTIFICADO_STOCK, elimina sus certificaciones y documentaciones, ' +
+      'resetea el estado a POR_ARRIBAR y registra el cambio en el historial. ' +
+      'Los datos base del vehículo (chasis, modelo, año, color, sede, datos de cliente) se conservan.',
+  })
+  resetToPorArribar(@Body() dto: RunSeedDto) {
+    return this.seedService.resetToPorArribar(dto.secretKey);
+  }
 }

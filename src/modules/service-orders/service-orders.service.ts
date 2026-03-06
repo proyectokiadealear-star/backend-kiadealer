@@ -180,7 +180,7 @@ export class ServiceOrdersService {
     const order = await this.findOne(orderId);
     const vehicle = await this.vehiclesService.assertExists(order!['vehicleId']);
 
-    const allowedOrderStatuses = ['GENERADA', 'ASIGNADA'];
+    const allowedOrderStatuses = ['GENERADA', 'ASIGNADA', 'REAPERTURA'];
     if (!allowedOrderStatuses.includes(order!['status'])) {
       throw new BadRequestException(
         `La OT debe estar en estado GENERADA o ASIGNADA para asignar técnico. Estado actual: ${order!['status']}`,
@@ -311,6 +311,18 @@ export class ServiceOrdersService {
           chassis: vehicle['chassis'] as string,
         }),
       ]);
+    } else {
+      // Notificar al técnico asignado que la instalación está en curso
+      await this.notificationsService.notify({
+        type: 'INICIO_INSTALACION',
+        targetRole: RoleEnum.PERSONAL_TALLER,
+        targetSede: order!['sede'],
+        title: '🔧 Instalación en curso',
+        body: `Accesorio '${dto.accessoryKey}' instalado en vehículo ${vehicle['chassis']}`,
+        vehicleId,
+        chassis: vehicle['chassis'] as string,
+        data: { technicianId: order!['assignedTechnicianId'] ?? '' },
+      });
     }
 
     return { orderId, vehicleId, allInstalled, newOrderStatus, vehicleNewStatus };
@@ -413,7 +425,7 @@ export class ServiceOrdersService {
     await this.db.collection('service-orders').doc(orderId).set(reopenData);
 
     await this.vehiclesService.changeStatus(dto.vehicleId, VehicleStatus.REAPERTURA_OT, user, {
-      notes: dto.reason,
+      notes: `Reapertura por ${user.displayName ?? user.email}: ${dto.reason}`,
     });
 
     await Promise.all([
@@ -429,6 +441,15 @@ export class ServiceOrdersService {
       this.notificationsService.notify({
         type: 'REAPERTURA',
         targetRole: RoleEnum.LIDER_TECNICO,
+        targetSede: vehicle['sede'],
+        title: '🔄 Reapertura de Orden de Trabajo',
+        body: `El vehículo ${vehicle['chassis']} tuvo reapertura de OT: ${dto.reason}`,
+        vehicleId: dto.vehicleId,
+        chassis: vehicle['chassis'] as string,
+      }),
+      this.notificationsService.notify({
+        type: 'REAPERTURA',
+        targetRole: RoleEnum.PERSONAL_TALLER,
         targetSede: vehicle['sede'],
         title: '🔄 Reapertura de Orden de Trabajo',
         body: `El vehículo ${vehicle['chassis']} tuvo reapertura de OT: ${dto.reason}`,

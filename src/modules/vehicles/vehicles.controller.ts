@@ -57,7 +57,7 @@ export class VehiclesController {
   @ApiResponse({ status: 400, description: 'Chasis duplicado o año inválido' })
   @ApiResponse({ status: 401, description: 'Token inválido o ausente' })
   @ApiResponse({ status: 403, description: 'Rol no autorizado' })
-  @Roles(RoleEnum.ASESOR, RoleEnum.LIDER_TECNICO, RoleEnum.PERSONAL_TALLER, RoleEnum.JEFE_TALLER, RoleEnum.SOPORTE)
+  @Roles(RoleEnum.DOCUMENTACION)
   create(
     @Body() dto: CreateVehicleDto,
     @CurrentUser() user: AuthenticatedUser,

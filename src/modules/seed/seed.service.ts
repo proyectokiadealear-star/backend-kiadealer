@@ -960,7 +960,7 @@ export class SeedService {
         sede:                 this.mapSede(sedeRaw),
         status:               esEntregado
           ? VehicleStatus.ENTREGADO
-          : VehicleStatus.CERTIFICADO_STOCK,
+          : VehicleStatus.POR_ARRIBAR,
         originConcessionaire: sedeRaw.toUpperCase(),
         clientName:           (
           this.col(row, 'clientName', 'clientname', 'Nombre cliente', 'cliente', 'nombre') ?? ''
@@ -993,5 +993,100 @@ export class SeedService {
       this.logger.warn(`⚠️  Sede desconocida: '${excelSede}' → asignando SURMOTOR`);
     }
     return SedeEnum.SURMOTOR;
+  }
+
+  // ──────────────────────────────────────────────────────────────────────
+  // RESET CERTIFICADO_STOCK → POR_ARRIBAR (sin eliminar vehículos)
+  // ──────────────────────────────────────────────────────────────────────
+  async resetToPorArribar(
+    secretKey: string,
+  ): Promise<{ total: number; reset: number; details: unknown[] }> {
+    this.validateSeedKey(secretKey);
+
+    // Buscar todos los vehículos en CERTIFICADO_STOCK
+    const snap = await this.db
+      .collection('vehicles')
+      .where('status', '==', VehicleStatus.CERTIFICADO_STOCK)
+      .get();
+
+    if (snap.empty) {
+      this.logger.log('✅ No hay vehículos en CERTIFICADO_STOCK para resetear');
+      return { total: 0, reset: 0, details: [] };
+    }
+
+    const details: unknown[] = [];
+    let reset = 0;
+
+    for (const doc of snap.docs) {
+      const vehicle = doc.data();
+      const vehicleId = doc.id;
+      const chassis = vehicle['chassis'];
+
+      try {
+        // 1. Eliminar certificación si existe
+        const certRef = this.db.collection('certifications').doc(vehicleId);
+        const certSnap = await certRef.get();
+        if (certSnap.exists) {
+          await certRef.delete();
+          this.logger.log(`  🗑️  Certificación eliminada: ${chassis}`);
+        }
+
+        // 2. Eliminar documentación si existe
+        const docRef = this.db.collection('documentations').doc(vehicleId);
+        const docSnap = await docRef.get();
+        if (docSnap.exists) {
+          await docRef.delete();
+          this.logger.log(`  🗑️  Documentación eliminada: ${chassis}`);
+        }
+
+        // 3. Resetear campos del vehículo a estado POR_ARRIBAR
+        const ts = this.firebase.serverTimestamp();
+        await this.db.collection('vehicles').doc(vehicleId).update({
+          status: VehicleStatus.POR_ARRIBAR,
+          registrationSentDate: null,
+          registrationReceivedDate: null,
+          receptionDate: null,
+          certificationDate: null,
+          certifiedBy: null,
+          documentationDate: null,
+          documentedBy: null,
+          installationCompleteDate: null,
+          installedBy: null,
+          deliveryDate: null,
+          deliveredBy: null,
+          originConcessionaire: null,
+          photoUrl: null,
+          updatedAt: ts,
+        });
+
+        // 4. Registrar en historial
+        const historyId = uuidv4();
+        await this.db
+          .collection('vehicles')
+          .doc(vehicleId)
+          .collection('statusHistory')
+          .doc(historyId)
+          .set({
+            id: historyId,
+            previousStatus: VehicleStatus.CERTIFICADO_STOCK,
+            newStatus: VehicleStatus.POR_ARRIBAR,
+            changedBy: 'seed-system',
+            changedByName: 'Seed Reset',
+            changedAt: ts,
+            sede: vehicle['sede'],
+            notes: 'Reset masivo de CERTIFICADO_STOCK → POR_ARRIBAR por seed',
+          });
+
+        details.push({ vehicleId, chassis, sede: vehicle['sede'], status: 'reset' });
+        this.logger.log(`  ✅ ${chassis} → POR_ARRIBAR`);
+        reset++;
+      } catch (err: any) {
+        this.logger.error(`  ❌ Error reseteando ${chassis}: ${err.message}`);
+        details.push({ vehicleId, chassis, status: 'error', error: err.message });
+      }
+    }
+
+    this.logger.log(`🔄 Reset completado: ${reset}/${snap.size} vehículos`);
+    return { total: snap.size, reset, details };
   }
 }

@@ -2,12 +2,15 @@ import {
   IsString,
   IsNotEmpty,
   IsNumber,
+  IsOptional,
+  IsEnum,
   Matches,
   Min,
   Max,
 } from 'class-validator';
 import { Transform } from 'class-transformer';
-import { ApiProperty } from '@nestjs/swagger';
+import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { SedeEnum } from '../../../common/enums/sede.enum';
 
 /**
  * DTO para el registro contable del vehículo (estado POR_ARRIBAR).
@@ -49,7 +52,7 @@ export class CreateVehicleDto {
   })
   @IsNumber()
   @Min(2000)
-  @Max(new Date().getFullYear() + 1)
+  @Max(new Date().getFullYear() + 5)
   year: number;
 
   @ApiProperty({
@@ -61,5 +64,13 @@ export class CreateVehicleDto {
   @Transform(({ value }) => (typeof value === 'string' ? value.toUpperCase().trim() : value))
   color: string;
 
-  // sede NO se recibe del cliente — se asigna automáticamente desde el claim del usuario (user.sede)
+  @ApiPropertyOptional({
+    description:
+      'Sede donde se registra el vehículo. Si no se envía, se asigna automáticamente desde el JWT del usuario.',
+    enum: SedeEnum,
+    example: 'SURMOTOR',
+  })
+  @IsOptional()
+  @IsEnum(SedeEnum, { message: 'Sede inválida. Valores permitidos: SURMOTOR, SHYRIS, GRANDA_CENTENO' })
+  sede?: SedeEnum;
 }

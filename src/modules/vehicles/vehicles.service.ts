@@ -14,13 +14,17 @@ import { SedeEnum } from '../../common/enums/sede.enum';
 import { RoleEnum } from '../../common/enums/role.enum';
 import { AccessoryKey, AccessoryClassification } from '../../common/enums/accessory-key.enum';
 import { AuthenticatedUser } from '../../common/interfaces/authenticated-user.interface';
+import { NotificationsService } from '../notifications/notifications.service';
 import { v4 as uuidv4 } from 'uuid';
 
 @Injectable()
 export class VehiclesService {
   private readonly logger = new Logger(VehiclesService.name);
 
-  constructor(private readonly firebase: FirebaseService) {}
+  constructor(
+    private readonly firebase: FirebaseService,
+    private readonly notificationsService: NotificationsService,
+  ) {}
 
   private get db() {
     return this.firebase.firestore();
@@ -52,8 +56,8 @@ export class VehiclesService {
       );
     }
 
-    // 3. Sede se asigna automáticamente desde el claim del usuario (no viene del DTO)
-    const sede = user.sede;
+    // 3. Sede: usa la del DTO si viene, o la del JWT del usuario como fallback
+    const sede = dto.sede ?? user.sede;
     const vehicleId = uuidv4();
 
     // 4. Crear documento Vehicle — registro contable (POR_ARRIBAR)
@@ -98,6 +102,28 @@ export class VehiclesService {
     );
 
     this.logger.log(`Vehículo creado: ${vehicleId} (${dto.chassis}) por ${user.uid}`);
+
+    // Notificar creación de vehículo
+    await Promise.all([
+      this.notificationsService.notify({
+        type: 'VEHICULO_REGISTRADO',
+        targetRole: RoleEnum.JEFE_TALLER,
+        targetSede: sede,
+        title: '🚗 Nuevo vehículo registrado',
+        body: `Vehículo ${dto.chassis} (${dto.model} ${dto.year}) registrado en ${sede}`,
+        vehicleId,
+        chassis: dto.chassis,
+      }),
+      this.notificationsService.notify({
+        type: 'VEHICULO_REGISTRADO',
+        targetRole: RoleEnum.DOCUMENTACION,
+        targetSede: sede,
+        title: '🚗 Nuevo vehículo registrado',
+        body: `Vehículo ${dto.chassis} (${dto.model} ${dto.year}) registrado — pendiente envío a matriculación`,
+        vehicleId,
+        chassis: dto.chassis,
+      }),
+    ]);
 
     return {
       id: vehicleId,

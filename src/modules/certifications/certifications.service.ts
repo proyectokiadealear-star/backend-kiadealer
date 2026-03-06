@@ -93,6 +93,7 @@ export class CertificationsService {
 
     // Cambiar estado del vehículo a CERTIFICADO_STOCK + guardar datos de recepción
     await this.vehiclesService.changeStatus(vehicleId, VehicleStatus.CERTIFICADO_STOCK, user, {
+      notes: `Certificado por ${user.displayName ?? user.email} — Km: ${dto.mileage}, Improntas: ${dto.imprints}`,
       extraFields: {
         certificationDate: now,
         certifiedBy: user.uid,
@@ -201,6 +202,7 @@ export class CertificationsService {
   async update(
     vehicleId: string,
     dto: Partial<CreateCertificationDto>,
+    user: AuthenticatedUser,
     files?: {
       vehiclePhoto?: Express.Multer.File;
       rimsPhoto?: Express.Multer.File;
@@ -208,6 +210,8 @@ export class CertificationsService {
   ) {
     const doc = await this.db.collection('certifications').doc(vehicleId).get();
     if (!doc.exists) throw new NotFoundException('Certificación no encontrada');
+
+    const vehicle = await this.vehiclesService.assertExists(vehicleId);
 
     const updates: Record<string, unknown> = {
       ...Object.fromEntries(Object.entries(dto).filter(([, v]) => v !== undefined)),
@@ -248,6 +252,31 @@ export class CertificationsService {
     }
 
     await this.db.collection('certifications').doc(vehicleId).update(updates);
+
+    // Registrar en historial los campos modificados
+    const changedFields: string[] = [];
+    if (dto.mileage !== undefined) changedFields.push('kilometraje');
+    if (dto.imprints !== undefined) changedFields.push('improntas');
+    if (dto.radio !== undefined) changedFields.push('radio');
+    if (dto.rimsStatus !== undefined) changedFields.push('aros');
+    if (dto.seatType !== undefined) changedFields.push('asientos');
+    if (dto.antenna !== undefined) changedFields.push('antena');
+    if (dto.trunkCover !== undefined) changedFields.push('cubre-maleta');
+    if (dto.originConcessionaire !== undefined) changedFields.push('concesionario origen');
+    if (files?.vehiclePhoto) changedFields.push('foto vehículo');
+    if (files?.rimsPhoto) changedFields.push('foto aros');
+
+    if (changedFields.length > 0) {
+      await this.vehiclesService.addStatusHistory(
+        vehicleId,
+        vehicle['status'] as VehicleStatus,
+        vehicle['status'] as VehicleStatus,
+        user,
+        vehicle['sede'],
+        `Certificación actualizada (${changedFields.join(', ')}) por ${user.displayName ?? user.email}`,
+      );
+    }
+
     return { vehicleId, updated: true };
   }
 
@@ -267,7 +296,7 @@ export class CertificationsService {
       VehicleStatus.DOCUMENTADO,
       user,
       {
-        notes: 'Certificación eliminada por JEFE_TALLER/SOPORTE — requiere re-certificación',
+        notes: `Certificación eliminada por ${user.displayName ?? user.email} — requiere re-certificación`,
         extraFields: { certificationDate: null, certifiedBy: null },
       },
     );

@@ -110,13 +110,14 @@ export class CertificationsController {
   update(
     @Param('vehicleId') vehicleId: string,
     @Body() dto: Partial<CreateCertificationDto>,
+    @CurrentUser() user: AuthenticatedUser,
     @UploadedFiles()
     files?: {
       vehiclePhoto?: Express.Multer.File[];
       rimsPhoto?: Express.Multer.File[];
     },
   ) {
-    return this.svc.update(vehicleId, dto, {
+    return this.svc.update(vehicleId, dto, user, {
       vehiclePhoto: files?.vehiclePhoto?.[0],
       rimsPhoto: files?.rimsPhoto?.[0],
     });

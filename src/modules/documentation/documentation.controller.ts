@@ -6,6 +6,7 @@
   Delete,
   Param,
   Body,
+  Query,
   UseGuards,
   UploadedFiles,
   UseInterceptors,
@@ -58,9 +59,9 @@ class CreateDocumentationMultipartDto {
     example: '[{"key":"aros","classification":"VENDIDO"},{"key":"moquetas","classification":"OBSEQUIADO"}]',
   }) accessories: string;
   @ApiPropertyOptional({ default: false }) saveAsPending?: boolean;
-  @ApiPropertyOptional({ type: 'string', format: 'binary', description: 'PDF — Factura del vehículo' }) vehicleInvoice?: Express.Multer.File;
-  @ApiPropertyOptional({ type: 'string', format: 'binary', description: 'PDF — Correo de obsequio' }) giftEmail?: Express.Multer.File;
-  @ApiPropertyOptional({ type: 'string', format: 'binary', description: 'PDF — Factura de accesorios' }) accessoryInvoice?: Express.Multer.File;
+  @ApiPropertyOptional({ type: 'string', format: 'binary', description: 'PDF — Factura del vehículo (1 archivo)' }) vehicleInvoice?: Express.Multer.File;
+  @ApiPropertyOptional({ type: 'array', items: { type: 'string', format: 'binary' }, description: 'PDFs — Correos de obsequio (hasta 5 archivos)' }) giftEmail?: Express.Multer.File[];
+  @ApiPropertyOptional({ type: 'array', items: { type: 'string', format: 'binary' }, description: 'PDFs — Facturas de accesorios (hasta 5 archivos)' }) accessoryInvoice?: Express.Multer.File[];
 }
 
 /** Esquema Swagger para PATCH multipart/form-data con archivos */
@@ -76,8 +77,8 @@ class UpdateDocumentationMultipartDto {
   }) accessories?: string;
   @ApiPropertyOptional({ description: 'false → completa la documentación pendiente y avanza a DOCUMENTADO' }) saveAsPending?: boolean;
   @ApiPropertyOptional({ type: 'string', format: 'binary', description: 'PDF — reemplaza factura del vehículo existente' }) vehicleInvoice?: Express.Multer.File;
-  @ApiPropertyOptional({ type: 'string', format: 'binary', description: 'PDF — reemplaza correo de obsequio existente' }) giftEmail?: Express.Multer.File;
-  @ApiPropertyOptional({ type: 'string', format: 'binary', description: 'PDF — reemplaza factura de accesorios existente' }) accessoryInvoice?: Express.Multer.File;
+  @ApiPropertyOptional({ type: 'array', items: { type: 'string', format: 'binary' }, description: 'PDFs — reemplaza correos de obsequio existentes (hasta 5)' }) giftEmail?: Express.Multer.File[];
+  @ApiPropertyOptional({ type: 'array', items: { type: 'string', format: 'binary' }, description: 'PDFs — reemplaza facturas de accesorios existentes (hasta 5)' }) accessoryInvoice?: Express.Multer.File[];
 }
 
 @ApiTags('Documentation')
@@ -106,8 +107,8 @@ export class DocumentationController {
   @UseInterceptors(
     FileFieldsInterceptor([
       { name: 'vehicleInvoice', maxCount: 1 },
-      { name: 'giftEmail', maxCount: 1 },
-      { name: 'accessoryInvoice', maxCount: 1 },
+      { name: 'giftEmail', maxCount: 5 },
+      { name: 'accessoryInvoice', maxCount: 5 },
     ]),
   )
   create(
@@ -123,8 +124,8 @@ export class DocumentationController {
   ) {
     return this.svc.create(vehicleId, dto, user, {
       vehicleInvoice: files?.vehicleInvoice?.[0],
-      giftEmail: files?.giftEmail?.[0],
-      accessoryInvoice: files?.accessoryInvoice?.[0],
+      giftEmails: files?.giftEmail ?? [],
+      accessoryInvoices: files?.accessoryInvoice ?? [],
     });
   }
 
@@ -199,8 +200,8 @@ export class DocumentationController {
   @UseInterceptors(
     FileFieldsInterceptor([
       { name: 'vehicleInvoice', maxCount: 1 },
-      { name: 'giftEmail', maxCount: 1 },
-      { name: 'accessoryInvoice', maxCount: 1 },
+      { name: 'giftEmail', maxCount: 5 },
+      { name: 'accessoryInvoice', maxCount: 5 },
     ]),
   )
   update(
@@ -216,8 +217,8 @@ export class DocumentationController {
   ) {
     return this.svc.update(vehicleId, dto, user, {
       vehicleInvoice: files?.vehicleInvoice?.[0],
-      giftEmail: files?.giftEmail?.[0],
-      accessoryInvoice: files?.accessoryInvoice?.[0],
+      giftEmails: files?.giftEmail ?? [],
+      accessoryInvoices: files?.accessoryInvoice ?? [],
     });
   }
 
@@ -246,7 +247,9 @@ export class DocumentationController {
     summary: 'Eliminar un PDF específico',
     description:
       'Elimina sólo el archivo indicado de Firebase Storage y limpia su URL en Firestore. Registra en statusHistory y notifica a JEFE_TALLER. ' +
-      '**fileType**: `vehicleInvoice` | `giftEmail` | `accessoryInvoice`. **Roles:** JEFE_TALLER, SOPORTE',
+      '**fileType**: `vehicleInvoice` | `giftEmail` | `accessoryInvoice`. ' +
+      'Para giftEmail/accessoryInvoice usar query param `index` (0-based) para eliminar un archivo específico del array. Sin index elimina todos. ' +
+      '**Roles:** JEFE_TALLER, SOPORTE',
   })
   @ApiParam({ name: 'vehicleId', description: 'ID del vehículo (UUID)' })
   @ApiParam({
@@ -263,8 +266,9 @@ export class DocumentationController {
     @Param('vehicleId') vehicleId: string,
     @Param('fileType') fileType: 'vehicleInvoice' | 'giftEmail' | 'accessoryInvoice',
     @CurrentUser() user: AuthenticatedUser,
+    @Query('index') index?: string,
   ) {
-    return this.svc.removeFile(vehicleId, fileType, user);
+    return this.svc.removeFile(vehicleId, fileType, user, index !== undefined ? Number(index) : undefined);
   }
 
   // ── CAMBIO DE SEDE ─────────────────────────────────────────────

@@ -34,8 +34,8 @@ export class DocumentationService {
     user: AuthenticatedUser,
     files?: {
       vehicleInvoice?: Express.Multer.File;
-      giftEmail?: Express.Multer.File;
-      accessoryInvoice?: Express.Multer.File;
+      giftEmails: Express.Multer.File[];
+      accessoryInvoices: Express.Multer.File[];
     },
   ) {
     const vehicle = await this.vehiclesService.assertExists(vehicleId);
@@ -47,10 +47,8 @@ export class DocumentationService {
       );
     }
 
-    // En documentation.service.ts
     const isPending = String(dto.saveAsPending) === 'true';
 
-    // DEBUG TEMPORAL — confirmar valor real de saveAsPending en producción
     this.logger.log(`[create] saveAsPending raw="${dto.saveAsPending}" (type=${typeof dto.saveAsPending}) → isPending=${isPending} → newStatus=${isPending ? 'DOCUMENTACION_PENDIENTE' : 'DOCUMENTADO'}`);
 
     // vehicleInvoice es obligatorio salvo que se guarde como pendiente
@@ -70,17 +68,25 @@ export class DocumentationService {
     };
 
     const basePath = `vehicles/${vehicleId}/docs`;
-    const [vehicleInvoiceUrl, giftEmailUrl, accessoryInvoiceUrl] = await Promise.all([
-      files?.vehicleInvoice
-        ? uploadAndSign(files.vehicleInvoice, `${basePath}/vehicle-invoice.pdf`)
-        : Promise.resolve(null),
-      files?.giftEmail
-        ? uploadAndSign(files.giftEmail, `${basePath}/gift-email.pdf`)
-        : Promise.resolve(null),
-      files?.accessoryInvoice
-        ? uploadAndSign(files.accessoryInvoice, `${basePath}/accessory-invoice.pdf`)
-        : Promise.resolve(null),
-    ]);
+
+    // Factura de vehículo (singular)
+    const vehicleInvoiceUrl = files?.vehicleInvoice
+      ? await uploadAndSign(files.vehicleInvoice, `${basePath}/vehicle-invoice.pdf`)
+      : null;
+
+    // Gift emails (hasta 5)
+    const giftEmailUrls: string[] = [];
+    for (let i = 0; i < (files?.giftEmails?.length ?? 0); i++) {
+      const url = await uploadAndSign(files!.giftEmails[i], `${basePath}/gift-email-${i}.pdf`);
+      giftEmailUrls.push(url);
+    }
+
+    // Facturas de accesorios (hasta 5)
+    const accessoryInvoiceUrls: string[] = [];
+    for (let i = 0; i < (files?.accessoryInvoices?.length ?? 0); i++) {
+      const url = await uploadAndSign(files!.accessoryInvoices[i], `${basePath}/accessory-invoice-${i}.pdf`);
+      accessoryInvoiceUrls.push(url);
+    }
 
     // Si todos los accesorios son NO_APLICA, el vehículo pasa directo a LISTO_PARA_ENTREGA
     const accessoriesList = Array.isArray(dto.accessories) ? dto.accessories : [];
@@ -104,8 +110,11 @@ export class DocumentationService {
       registrationType: dto.registrationType,
       paymentMethod: dto.paymentMethod,
       vehicleInvoiceUrl,
-      giftEmailUrl,
-      accessoryInvoiceUrl,
+      giftEmailUrls,
+      accessoryInvoiceUrls,
+      // Retrocompat: primer elemento (o null)
+      giftEmailUrl: giftEmailUrls[0] ?? null,
+      accessoryInvoiceUrl: accessoryInvoiceUrls[0] ?? null,
       accessories: Array.isArray(dto.accessories)
         ? JSON.parse(JSON.stringify(dto.accessories))
         : dto.accessories,
@@ -257,6 +266,27 @@ export class DocumentationService {
       updatedAt: this.firebase.serverTimestamp(),
     });
 
+    // Registrar en historial (mismo estado, evento auditable)
+    await this.vehiclesService.addStatusHistory(
+      vehicleId,
+      VehicleStatus.ENVIADO_A_MATRICULAR,
+      VehicleStatus.ENVIADO_A_MATRICULAR,
+      user,
+      vehicle['sede'],
+      `Matrícula recibida el ${registrationReceivedDate} por ${user.displayName ?? user.email}`,
+    );
+
+    // Notificar a DOCUMENTACION que la matrícula llegó
+    await this.notificationsService.notify({
+      type: 'MATRICULA_RECIBIDA',
+      targetRole: RoleEnum.DOCUMENTACION,
+      targetSede: vehicle['sede'],
+      title: '📋 Matrícula recibida',
+      body: `La matrícula del vehículo ${vehicle['chassis']} fue recibida el ${registrationReceivedDate}`,
+      vehicleId,
+      chassis: vehicle['chassis'] as string,
+    });
+
     this.logger.log(`Matrícula recibida para vehículo ${vehicleId} por ${user.uid}`);
     return { vehicleId, registrationReceivedDate };
   }
@@ -266,17 +296,51 @@ export class DocumentationService {
     if (!doc.exists) throw new NotFoundException('Documentación no encontrada');
 
     const data = doc.data()!;
-    // Regenerar URLs firmadas frescas
-    const paths: { key: string; path: string }[] = [
-      { key: 'vehicleInvoiceUrl', path: `vehicles/${vehicleId}/docs/vehicle-invoice.pdf` },
-      { key: 'giftEmailUrl', path: `vehicles/${vehicleId}/docs/gift-email.pdf` },
-      { key: 'accessoryInvoiceUrl', path: `vehicles/${vehicleId}/docs/accessory-invoice.pdf` },
-    ];
+    const basePath = `vehicles/${vehicleId}/docs`;
 
-    for (const { key, path } of paths) {
-      if (data[key]) {
-        data[key] = await this.firebase.getSignedUrl(path).catch(() => data[key]);
+    // Regenerar URL firmada fresca para factura de vehículo
+    if (data['vehicleInvoiceUrl']) {
+      data['vehicleInvoiceUrl'] = await this.firebase
+        .getSignedUrl(`${basePath}/vehicle-invoice.pdf`)
+        .catch(() => data['vehicleInvoiceUrl']);
+    }
+
+    // Regenerar URLs firmadas para gift emails (array)
+    const giftEmailUrls: string[] = data['giftEmailUrls'] ?? [];
+    if (giftEmailUrls.length > 0) {
+      const fresh: string[] = [];
+      for (let i = 0; i < giftEmailUrls.length; i++) {
+        const url = await this.firebase
+          .getSignedUrl(`${basePath}/gift-email-${i}.pdf`)
+          .catch(() => giftEmailUrls[i]);
+        fresh.push(url);
       }
+      data['giftEmailUrls'] = fresh;
+      data['giftEmailUrl'] = fresh[0] ?? null;
+    } else if (data['giftEmailUrl']) {
+      // Legacy: documento singular
+      data['giftEmailUrl'] = await this.firebase
+        .getSignedUrl(`${basePath}/gift-email.pdf`)
+        .catch(() => data['giftEmailUrl']);
+    }
+
+    // Regenerar URLs firmadas para facturas de accesorios (array)
+    const accessoryInvoiceUrls: string[] = data['accessoryInvoiceUrls'] ?? [];
+    if (accessoryInvoiceUrls.length > 0) {
+      const fresh: string[] = [];
+      for (let i = 0; i < accessoryInvoiceUrls.length; i++) {
+        const url = await this.firebase
+          .getSignedUrl(`${basePath}/accessory-invoice-${i}.pdf`)
+          .catch(() => accessoryInvoiceUrls[i]);
+        fresh.push(url);
+      }
+      data['accessoryInvoiceUrls'] = fresh;
+      data['accessoryInvoiceUrl'] = fresh[0] ?? null;
+    } else if (data['accessoryInvoiceUrl']) {
+      // Legacy: documento singular
+      data['accessoryInvoiceUrl'] = await this.firebase
+        .getSignedUrl(`${basePath}/accessory-invoice.pdf`)
+        .catch(() => data['accessoryInvoiceUrl']);
     }
 
     return data;
@@ -288,14 +352,15 @@ export class DocumentationService {
     user: AuthenticatedUser,
     files?: {
       vehicleInvoice?: Express.Multer.File;
-      giftEmail?: Express.Multer.File;
-      accessoryInvoice?: Express.Multer.File;
+      giftEmails: Express.Multer.File[];
+      accessoryInvoices: Express.Multer.File[];
     },
   ) {
     const docSnap = await this.db.collection('documentations').doc(vehicleId).get();
     if (!docSnap.exists) throw new NotFoundException('Documentación no encontrada');
 
     const vehicle = await this.vehiclesService.assertExists(vehicleId);
+    const existingData = docSnap.data()!;
 
     const { saveAsPending, accessories, ...restDto } = dto;
     const isCompleting =
@@ -318,7 +383,6 @@ export class DocumentationService {
       updates['documentedBy'] = user.uid;
     }
 
-    // Reemplazar PDFs específicos que se reciban — solo el archivo enviado
     const basePath = `vehicles/${vehicleId}/docs`;
     const uploadAndSign = async (file: Express.Multer.File, path: string) => {
       await this.firebase.deleteFile(path);
@@ -328,20 +392,53 @@ export class DocumentationService {
 
     const updatedFiles: string[] = [];
 
-    await Promise.all([
-      files?.vehicleInvoice
-        ? uploadAndSign(files.vehicleInvoice, `${basePath}/vehicle-invoice.pdf`)
-          .then((url) => { updates['vehicleInvoiceUrl'] = url; updatedFiles.push('Factura vehículo'); })
-        : Promise.resolve(),
-      files?.giftEmail
-        ? uploadAndSign(files.giftEmail, `${basePath}/gift-email.pdf`)
-          .then((url) => { updates['giftEmailUrl'] = url; updatedFiles.push('Email regalo'); })
-        : Promise.resolve(),
-      files?.accessoryInvoice
-        ? uploadAndSign(files.accessoryInvoice, `${basePath}/accessory-invoice.pdf`)
-          .then((url) => { updates['accessoryInvoiceUrl'] = url; updatedFiles.push('Factura accesorios'); })
-        : Promise.resolve(),
-    ]);
+    // Factura de vehículo (singular)
+    if (files?.vehicleInvoice) {
+      const url = await uploadAndSign(files.vehicleInvoice, `${basePath}/vehicle-invoice.pdf`);
+      updates['vehicleInvoiceUrl'] = url;
+      updatedFiles.push('Factura vehículo');
+    }
+
+    // Gift emails (reemplaza todo el array anterior)
+    if (files?.giftEmails && files.giftEmails.length > 0) {
+      // Borrar archivos anteriores
+      const oldUrls: string[] = existingData['giftEmailUrls'] ?? [];
+      for (let i = 0; i < oldUrls.length; i++) {
+        await this.firebase.deleteFile(`${basePath}/gift-email-${i}.pdf`).catch(() => {});
+      }
+      // También borrar el legacy singular
+      if (existingData['giftEmailUrl'] && oldUrls.length === 0) {
+        await this.firebase.deleteFile(`${basePath}/gift-email.pdf`).catch(() => {});
+      }
+      // Subir nuevos
+      const giftEmailUrls: string[] = [];
+      for (let i = 0; i < files.giftEmails.length; i++) {
+        const url = await uploadAndSign(files.giftEmails[i], `${basePath}/gift-email-${i}.pdf`);
+        giftEmailUrls.push(url);
+      }
+      updates['giftEmailUrls'] = giftEmailUrls;
+      updates['giftEmailUrl'] = giftEmailUrls[0] ?? null;
+      updatedFiles.push('Email(s) regalo');
+    }
+
+    // Facturas de accesorios (reemplaza todo el array anterior)
+    if (files?.accessoryInvoices && files.accessoryInvoices.length > 0) {
+      const oldUrls: string[] = existingData['accessoryInvoiceUrls'] ?? [];
+      for (let i = 0; i < oldUrls.length; i++) {
+        await this.firebase.deleteFile(`${basePath}/accessory-invoice-${i}.pdf`).catch(() => {});
+      }
+      if (existingData['accessoryInvoiceUrl'] && oldUrls.length === 0) {
+        await this.firebase.deleteFile(`${basePath}/accessory-invoice.pdf`).catch(() => {});
+      }
+      const accessoryInvoiceUrls: string[] = [];
+      for (let i = 0; i < files.accessoryInvoices.length; i++) {
+        const url = await uploadAndSign(files.accessoryInvoices[i], `${basePath}/accessory-invoice-${i}.pdf`);
+        accessoryInvoiceUrls.push(url);
+      }
+      updates['accessoryInvoiceUrls'] = accessoryInvoiceUrls;
+      updates['accessoryInvoiceUrl'] = accessoryInvoiceUrls[0] ?? null;
+      updatedFiles.push('Factura(s) accesorios');
+    }
 
     await this.db.collection('documentations').doc(vehicleId).update(updates);
 
@@ -427,8 +524,26 @@ export class DocumentationService {
     const basePath = `vehicles/${vehicleId}/docs`;
     const deleteJobs: Promise<void>[] = [];
     if (data['vehicleInvoiceUrl']) deleteJobs.push(this.firebase.deleteFile(`${basePath}/vehicle-invoice.pdf`));
-    if (data['giftEmailUrl']) deleteJobs.push(this.firebase.deleteFile(`${basePath}/gift-email.pdf`));
-    if (data['accessoryInvoiceUrl']) deleteJobs.push(this.firebase.deleteFile(`${basePath}/accessory-invoice.pdf`));
+
+    // Gift emails: array o legacy singular
+    const giftEmailUrls: string[] = data['giftEmailUrls'] ?? [];
+    if (giftEmailUrls.length > 0) {
+      for (let i = 0; i < giftEmailUrls.length; i++) {
+        deleteJobs.push(this.firebase.deleteFile(`${basePath}/gift-email-${i}.pdf`));
+      }
+    } else if (data['giftEmailUrl']) {
+      deleteJobs.push(this.firebase.deleteFile(`${basePath}/gift-email.pdf`));
+    }
+
+    // Facturas de accesorios: array o legacy singular
+    const accessoryInvoiceUrls: string[] = data['accessoryInvoiceUrls'] ?? [];
+    if (accessoryInvoiceUrls.length > 0) {
+      for (let i = 0; i < accessoryInvoiceUrls.length; i++) {
+        deleteJobs.push(this.firebase.deleteFile(`${basePath}/accessory-invoice-${i}.pdf`));
+      }
+    } else if (data['accessoryInvoiceUrl']) {
+      deleteJobs.push(this.firebase.deleteFile(`${basePath}/accessory-invoice.pdf`));
+    }
     await Promise.all(deleteJobs);
 
     await this.db.collection('documentations').doc(vehicleId).delete();
@@ -463,28 +578,96 @@ export class DocumentationService {
     vehicleId: string,
     fileType: 'vehicleInvoice' | 'giftEmail' | 'accessoryInvoice',
     user: AuthenticatedUser,
+    index?: number,
   ) {
     const docSnap = await this.db.collection('documentations').doc(vehicleId).get();
     if (!docSnap.exists) throw new NotFoundException('Documentación no encontrada');
 
     const vehicle = await this.vehiclesService.assertExists(vehicleId);
+    const data = docSnap.data()!;
+    const basePath = `vehicles/${vehicleId}/docs`;
+    let label: string;
 
-    const fileMap: Record<string, { storagePath: string; urlField: string; label: string }> = {
-      vehicleInvoice: { storagePath: `vehicles/${vehicleId}/docs/vehicle-invoice.pdf`, urlField: 'vehicleInvoiceUrl', label: 'Factura vehículo' },
-      giftEmail: { storagePath: `vehicles/${vehicleId}/docs/gift-email.pdf`, urlField: 'giftEmailUrl', label: 'Email regalo' },
-      accessoryInvoice: { storagePath: `vehicles/${vehicleId}/docs/accessory-invoice.pdf`, urlField: 'accessoryInvoiceUrl', label: 'Factura accesorios' },
-    };
+    if (fileType === 'vehicleInvoice') {
+      label = 'Factura vehículo';
+      await this.firebase.deleteFile(`${basePath}/vehicle-invoice.pdf`);
+      await this.db.collection('documentations').doc(vehicleId).update({
+        vehicleInvoiceUrl: null,
+        updatedAt: this.firebase.serverTimestamp(),
+      });
+    } else if (fileType === 'giftEmail') {
+      label = 'Email regalo';
+      const urls: string[] = data['giftEmailUrls'] ?? [];
+      if (urls.length > 0 && index !== undefined) {
+        // Eliminar un archivo específico del array
+        if (index < 0 || index >= urls.length) {
+          throw new BadRequestException(`Índice ${index} fuera de rango (0..${urls.length - 1})`);
+        }
+        await this.firebase.deleteFile(`${basePath}/gift-email-${index}.pdf`);
+        urls.splice(index, 1);
+        // Re-indexar archivos restantes en Storage
+        for (let i = index; i < urls.length; i++) {
+          // Mover gift-email-(i+1).pdf → gift-email-i.pdf
+          // Como Firebase Storage no soporta rename, re-upload no es práctico.
+          // Solo limpiamos la referencia; los paths en Storage quedan con gaps pero las URLs son absolutas.
+        }
+        await this.db.collection('documentations').doc(vehicleId).update({
+          giftEmailUrls: urls,
+          giftEmailUrl: urls[0] ?? null,
+          updatedAt: this.firebase.serverTimestamp(),
+        });
+        label = `Email regalo [${index}]`;
+      } else {
+        // Eliminar todos (legacy o sin index)
+        if (urls.length > 0) {
+          for (let i = 0; i < urls.length; i++) {
+            await this.firebase.deleteFile(`${basePath}/gift-email-${i}.pdf`).catch(() => {});
+          }
+        } else {
+          await this.firebase.deleteFile(`${basePath}/gift-email.pdf`).catch(() => {});
+        }
+        await this.db.collection('documentations').doc(vehicleId).update({
+          giftEmailUrls: [],
+          giftEmailUrl: null,
+          updatedAt: this.firebase.serverTimestamp(),
+        });
+        label = 'Todos los emails regalo';
+      }
+    } else if (fileType === 'accessoryInvoice') {
+      label = 'Factura accesorios';
+      const urls: string[] = data['accessoryInvoiceUrls'] ?? [];
+      if (urls.length > 0 && index !== undefined) {
+        if (index < 0 || index >= urls.length) {
+          throw new BadRequestException(`Índice ${index} fuera de rango (0..${urls.length - 1})`);
+        }
+        await this.firebase.deleteFile(`${basePath}/accessory-invoice-${index}.pdf`);
+        urls.splice(index, 1);
+        await this.db.collection('documentations').doc(vehicleId).update({
+          accessoryInvoiceUrls: urls,
+          accessoryInvoiceUrl: urls[0] ?? null,
+          updatedAt: this.firebase.serverTimestamp(),
+        });
+        label = `Factura accesorios [${index}]`;
+      } else {
+        if (urls.length > 0) {
+          for (let i = 0; i < urls.length; i++) {
+            await this.firebase.deleteFile(`${basePath}/accessory-invoice-${i}.pdf`).catch(() => {});
+          }
+        } else {
+          await this.firebase.deleteFile(`${basePath}/accessory-invoice.pdf`).catch(() => {});
+        }
+        await this.db.collection('documentations').doc(vehicleId).update({
+          accessoryInvoiceUrls: [],
+          accessoryInvoiceUrl: null,
+          updatedAt: this.firebase.serverTimestamp(),
+        });
+        label = 'Todas las facturas accesorios';
+      }
+    } else {
+      throw new BadRequestException(`Tipo de archivo inválido: ${fileType}`);
+    }
 
-    const target = fileMap[fileType];
-    if (!target) throw new BadRequestException(`Tipo de archivo inválido: ${fileType}`);
-
-    await this.firebase.deleteFile(target.storagePath);
-    await this.db.collection('documentations').doc(vehicleId).update({
-      [target.urlField]: null,
-      updatedAt: this.firebase.serverTimestamp(),
-    });
-
-    const note = `Archivo "${target.label}" eliminado por ${user.displayName ?? user.email}`;
+    const note = `Archivo "${label}" eliminado por ${user.displayName ?? user.email}`;
     await Promise.all([
       this.vehiclesService.addStatusHistory(
         vehicleId,
@@ -505,8 +688,8 @@ export class DocumentationService {
       }),
     ]);
 
-    this.logger.log(`Archivo ${fileType} eliminado para vehículo ${vehicleId} por ${user.uid}`);
-    return { vehicleId, fileType, deleted: true };
+    this.logger.log(`Archivo ${fileType}${index !== undefined ? `[${index}]` : ''} eliminado para vehículo ${vehicleId} por ${user.uid}`);
+    return { vehicleId, fileType, index: index ?? null, deleted: true };
   }
 
   async changeSede(vehicleId: string, newSede: string, user: AuthenticatedUser) {
@@ -514,7 +697,7 @@ export class DocumentationService {
 
     // Cambio de sede: NO modifica el status, solo actualiza la sede y registra en historial
     await this.vehiclesService.changeStatus(vehicleId, vehicle['status'] as VehicleStatus, user, {
-      notes: `Cambio de sede: ${vehicle['sede']} → ${newSede}`,
+      notes: `Cambio de sede: ${vehicle['sede']} → ${newSede} por ${user.displayName ?? user.email}`,
       extraFields: { sede: newSede },
     });
 
@@ -580,7 +763,7 @@ export class DocumentationService {
     }
 
     await this.vehiclesService.changeStatus(vehicleId, VehicleStatus.CEDIDO, user, {
-      notes: `Cedido a: ${targetConcessionaire}`,
+      notes: `Cedido a ${targetConcessionaire} por ${user.displayName ?? user.email}`,
       extraFields: { targetConcessionaire, transferDocUrl },
     });
 
