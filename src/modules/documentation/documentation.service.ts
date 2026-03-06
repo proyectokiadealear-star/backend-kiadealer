@@ -255,9 +255,20 @@ export class DocumentationService {
   ) {
     const vehicle = await this.vehiclesService.assertExists(vehicleId);
 
-    if (vehicle['status'] !== VehicleStatus.ENVIADO_A_MATRICULAR) {
+    const allowedForRegistration = [
+      VehicleStatus.ENVIADO_A_MATRICULAR,
+      VehicleStatus.DOCUMENTACION_PENDIENTE,
+      VehicleStatus.DOCUMENTADO,
+      VehicleStatus.CERTIFICADO_STOCK,
+      VehicleStatus.ORDEN_GENERADA,
+      VehicleStatus.ASIGNADO,
+      VehicleStatus.EN_INSTALACION,
+      VehicleStatus.INSTALACION_COMPLETA,
+      VehicleStatus.LISTO_PARA_ENTREGA,
+    ];
+    if (!allowedForRegistration.includes(vehicle['status'] as VehicleStatus)) {
       throw new BadRequestException(
-        `El vehículo debe estar en ENVIADO_A_MATRICULAR para recibir matrícula. Estado actual: ${vehicle['status']}`,
+        `No se puede registrar recepción de matrícula en estado ${vehicle['status']}. Permitido desde ENVIADO_A_MATRICULAR hasta LISTO_PARA_ENTREGA.`,
       );
     }
 
@@ -266,11 +277,13 @@ export class DocumentationService {
       updatedAt: this.firebase.serverTimestamp(),
     });
 
+    const currentStatus = vehicle['status'] as VehicleStatus;
+
     // Registrar en historial (mismo estado, evento auditable)
     await this.vehiclesService.addStatusHistory(
       vehicleId,
-      VehicleStatus.ENVIADO_A_MATRICULAR,
-      VehicleStatus.ENVIADO_A_MATRICULAR,
+      currentStatus,
+      currentStatus,
       user,
       vehicle['sede'],
       `Matrícula recibida el ${registrationReceivedDate} por ${user.displayName ?? user.email}`,

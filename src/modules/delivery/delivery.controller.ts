@@ -56,7 +56,7 @@ export class DeliveryController {
   @ApiResponse({ status: 400, description: 'Vehículo no está AGENDADO o no es el día de entrega' })
   @ApiResponse({ status: 403, description: 'No eres el asesor asignado al agendamiento' })
   @ApiResponse({ status: 404, description: 'Vehículo o agendamiento no encontrado' })
-  @Roles(RoleEnum.ASESOR, RoleEnum.JEFE_TALLER, RoleEnum.SOPORTE)
+  @Roles(RoleEnum.ASESOR, RoleEnum.LIDER_TECNICO, RoleEnum.JEFE_TALLER, RoleEnum.SOPORTE)
   @UseInterceptors(
     FileFieldsInterceptor([
       { name: 'deliveryPhoto', maxCount: 1 },
@@ -86,7 +86,7 @@ export class DeliveryController {
   @ApiParam({ name: 'vehicleId', description: 'ID del vehículo (UUID)' })
   @ApiResponse({ status: 200, description: 'Datos de la ceremonia con deliveryPhotoUrl y signedActaUrl' })
   @ApiResponse({ status: 404, description: 'Ceremonia de entrega no encontrada' })
-  @Roles(RoleEnum.ASESOR, RoleEnum.JEFE_TALLER, RoleEnum.SOPORTE)
+  @Roles(RoleEnum.ASESOR, RoleEnum.LIDER_TECNICO,RoleEnum.JEFE_TALLER, RoleEnum.SOPORTE)
   getCeremony(@Param('vehicleId') vehicleId: string) {
     return this.svc.getCeremony(vehicleId);
   }
