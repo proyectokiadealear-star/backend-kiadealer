@@ -313,13 +313,43 @@ export class VehiclesService {
   }
 
   // ──────────────────────────────────────────────────────────────────
-  // DELETE (JEFE_TALLER / SOPORTE)
+  // DELETE (JEFE_TALLER / SOPORTE) — cascada completa
   // ──────────────────────────────────────────────────────────────────
   async remove(id: string) {
     await this.assertExists(id);
-    // Eliminar foto de Firebase Storage si existe (puede no tener foto si aún está en POR_ARRIBAR)
+
+    // 1. Eliminar foto de Firebase Storage si existe
     await this.firebase.deleteFile(`vehicles/${id}/photo.jpg`).catch(() => {});
-    await this.db.collection('vehicles').doc(id).delete();
+
+    // 2. Consultar en paralelo todas las colecciones relacionadas
+    const [serviceOrdersSnap, appointmentsSnap, notificationsSnap, statusHistorySnap] =
+      await Promise.all([
+        this.db.collection('service-orders').where('vehicleId', '==', id).get(),
+        this.db.collection('appointments').where('vehicleId', '==', id).get(),
+        this.db.collection('notifications').where('vehicleId', '==', id).get(),
+        this.db.collection('vehicles').doc(id).collection('statusHistory').get(),
+      ]);
+
+    // 3. Construir lista de todas las referencias a eliminar
+    const refs: FirebaseFirestore.DocumentReference[] = [
+      ...serviceOrdersSnap.docs.map((d) => d.ref),
+      ...appointmentsSnap.docs.map((d) => d.ref),
+      ...notificationsSnap.docs.map((d) => d.ref),
+      ...statusHistorySnap.docs.map((d) => d.ref),
+      this.db.collection('documentations').doc(id),
+      this.db.collection('certifications').doc(id),
+      this.db.collection('deliveryCeremonies').doc(id),
+      this.db.collection('vehicles').doc(id),
+    ];
+
+    // 4. Eliminar en lotes de 500 (límite de Firestore)
+    const CHUNK_SIZE = 500;
+    for (let i = 0; i < refs.length; i += CHUNK_SIZE) {
+      const batch = this.db.batch();
+      refs.slice(i, i + CHUNK_SIZE).forEach((ref) => batch.delete(ref));
+      await batch.commit();
+    }
+
     return { id, deleted: true };
   }
 
