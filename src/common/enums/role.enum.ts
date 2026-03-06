@@ -5,4 +5,5 @@ export enum RoleEnum {
   LIDER_TECNICO = 'LIDER_TECNICO',
   PERSONAL_TALLER = 'PERSONAL_TALLER',
   DOCUMENTACION = 'DOCUMENTACION',
+  BODEGUERO = 'BODEGUERO',     // Solo lectura de stock (GET /vehicles)
 }

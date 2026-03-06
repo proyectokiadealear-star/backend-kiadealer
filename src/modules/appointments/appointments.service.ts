@@ -27,6 +27,10 @@ export class AppointmentsService {
       throw new BadRequestException(`El vehículo debe estar LISTO_PARA_ENTREGA. Estado: ${vehicle['status']}`);
     }
 
+    if (!vehicle['registrationReceivedDate']) {
+      throw new BadRequestException('No se puede agendar sin haber recibido la matrícula del vehículo.');
+    }
+
     // ── Verificar conflicto de horario para el asesor ──────────────────────
     // Se consulta solo por assignedAdvisorId (índice simple automático) y se
     // filtra scheduledDate + scheduledTime en memoria para evitar índices compuestos.

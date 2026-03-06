@@ -178,7 +178,7 @@ export class DocumentationController {
   @ApiParam({ name: 'vehicleId', description: 'ID del vehículo (UUID)' })
   @ApiResponse({ status: 200, description: 'Datos de documentación con URLs firmadas' })
   @ApiResponse({ status: 404, description: 'Documentación no encontrada' })
-  @Roles(RoleEnum.DOCUMENTACION, RoleEnum.JEFE_TALLER, RoleEnum.SOPORTE)
+  @Roles(RoleEnum.DOCUMENTACION, RoleEnum.JEFE_TALLER, RoleEnum.SOPORTE, RoleEnum.BODEGUERO)
   findOne(@Param('vehicleId') vehicleId: string) {
     return this.svc.findOne(vehicleId);
   }

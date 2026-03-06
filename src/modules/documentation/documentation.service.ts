@@ -376,10 +376,12 @@ export class DocumentationService {
     const existingData = docSnap.data()!;
 
     const { saveAsPending, accessories, ...restDto } = dto;
-    const isCompleting =
-      saveAsPending === false &&
-      vehicle['status'] === VehicleStatus.DOCUMENTACION_PENDIENTE;
     const isReopening = !!vehicle['isReopening'];
+    const isCompleting =
+      vehicle['status'] === VehicleStatus.DOCUMENTACION_PENDIENTE &&
+      // Flujo normal: requiere saveAsPending=false explícito
+      // Flujo reapertura: auto-completa a menos que explícitamente saveAsPending=true
+      (saveAsPending === false || (isReopening && saveAsPending !== true));
 
     const now = this.firebase.serverTimestamp();
     const updates: Record<string, unknown> = {
