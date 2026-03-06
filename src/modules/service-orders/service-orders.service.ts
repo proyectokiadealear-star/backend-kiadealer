@@ -180,7 +180,7 @@ export class ServiceOrdersService {
     const order = await this.findOne(orderId);
     const vehicle = await this.vehiclesService.assertExists(order!['vehicleId']);
 
-    const allowedOrderStatuses = ['GENERADA', 'ASIGNADA', 'REAPERTURA'];
+    const allowedOrderStatuses = ['GENERADA', 'ASIGNADA'];
     if (!allowedOrderStatuses.includes(order!['status'])) {
       throw new BadRequestException(
         `La OT debe estar en estado GENERADA o ASIGNADA para asignar técnico. Estado actual: ${order!['status']}`,
@@ -376,56 +376,27 @@ export class ServiceOrdersService {
   async reopenOrder(dto: ReopenOrderDto, user: AuthenticatedUser) {
     const vehicle = await this.vehiclesService.assertExists(dto.vehicleId);
 
-    const allowedStatuses = [VehicleStatus.EN_INSTALACION, VehicleStatus.LISTO_PARA_ENTREGA];
+    const allowedStatuses = [VehicleStatus.EN_INSTALACION, VehicleStatus.INSTALACION_COMPLETA, VehicleStatus.LISTO_PARA_ENTREGA];
     if (!allowedStatuses.includes(vehicle['status'] as VehicleStatus)) {
-      throw new BadRequestException('Solo se puede reabrir desde EN_INSTALACION o LISTO_PARA_ENTREGA');
+      throw new BadRequestException('Solo se puede reabrir desde EN_INSTALACION, INSTALACION_COMPLETA o LISTO_PARA_ENTREGA');
     }
 
-    // Obtener la OT actual
-    // Sin orderBy para evitar índice compuesto — ordenamos en memoria
-    const currentOrderSnap = await this.db
-      .collection('service-orders')
-      .where('vehicleId', '==', dto.vehicleId)
-      .where('isReopening', '==', false)
-      .get();
-
-    const sortedOrders = currentOrderSnap.docs
-      .map((d) => d.data())
-      .sort((a, b) => (b['createdAt']?._seconds ?? 0) - (a['createdAt']?._seconds ?? 0));
-    const previousOrderId = sortedOrders.length > 0 ? sortedOrders[0]['id'] : null;
-
-    const orderId = uuidv4();
-    const orderNumber = this.generateOrderNumber(vehicle['sede'] as string);
+    const accessoryLabels = dto.newAccessories.join(', ');
     const now = this.firebase.serverTimestamp();
 
-    const reopenData = {
-      id: orderId,
-      orderNumber,
-      vehicleId: dto.vehicleId,
-      sede: vehicle['sede'],
-      chassis: vehicle['chassis'],
-      accessories: dto.newAccessories.map((key) => ({
-        key,
-        classification: AccessoryClassification.VENDIDO,
-      })),
-      predictions: [],
-      checklist: dto.newAccessories.map((key) => ({ key, installed: false })),
-      assignedTechnicianId: null,
-      assignedTechnicianName: null,
-      status: 'REAPERTURA',
+    // Guardar info de reapertura en el vehículo para que documentación la consuma
+    await this.db.collection('vehicles').doc(dto.vehicleId).update({
       isReopening: true,
-      previousOrderId,
-      reason: dto.reason,
-      createdBy: user.uid,
-      createdByName: user.displayName ?? user.email,
-      createdAt: now,
-      updatedAt: now,
-    };
+      reopenReason: dto.reason,
+      reopenAccessories: dto.newAccessories,
+      reopenRequestedBy: user.uid,
+      reopenRequestedByName: user.displayName ?? user.email,
+      reopenRequestedAt: now,
+    });
 
-    await this.db.collection('service-orders').doc(orderId).set(reopenData);
-
-    await this.vehiclesService.changeStatus(dto.vehicleId, VehicleStatus.REAPERTURA_OT, user, {
-      notes: `Reapertura por ${user.displayName ?? user.email}: ${dto.reason}`,
+    // Cambiar estado a DOCUMENTACION_PENDIENTE (el statusHistory registra el motivo)
+    await this.vehiclesService.changeStatus(dto.vehicleId, VehicleStatus.DOCUMENTACION_PENDIENTE, user, {
+      notes: `Reapertura por ${user.displayName ?? user.email}: ${dto.reason}. Accesorios solicitados: ${accessoryLabels}`,
     });
 
     await Promise.all([
@@ -434,7 +405,16 @@ export class ServiceOrdersService {
         targetRole: RoleEnum.JEFE_TALLER,
         targetSede: 'ALL',
         title: '🔄 Reapertura de Orden de Trabajo',
-        body: `El vehículo ${vehicle['chassis']} tuvo reapertura de OT: ${dto.reason}`,
+        body: `${vehicle['chassis']} — Reapertura: ${dto.reason}. Accesorios: ${accessoryLabels}`,
+        vehicleId: dto.vehicleId,
+        chassis: vehicle['chassis'] as string,
+      }),
+      this.notificationsService.notify({
+        type: 'REAPERTURA',
+        targetRole: RoleEnum.ASESOR,
+        targetSede: vehicle['sede'],
+        title: '🔄 Reapertura — Documentación requerida',
+        body: `${vehicle['chassis']} requiere documentar accesorios adicionales: ${accessoryLabels}. Motivo: ${dto.reason}`,
         vehicleId: dto.vehicleId,
         chassis: vehicle['chassis'] as string,
       }),
@@ -443,22 +423,20 @@ export class ServiceOrdersService {
         targetRole: RoleEnum.LIDER_TECNICO,
         targetSede: vehicle['sede'],
         title: '🔄 Reapertura de Orden de Trabajo',
-        body: `El vehículo ${vehicle['chassis']} tuvo reapertura de OT: ${dto.reason}`,
-        vehicleId: dto.vehicleId,
-        chassis: vehicle['chassis'] as string,
-      }),
-      this.notificationsService.notify({
-        type: 'REAPERTURA',
-        targetRole: RoleEnum.PERSONAL_TALLER,
-        targetSede: vehicle['sede'],
-        title: '🔄 Reapertura de Orden de Trabajo',
-        body: `El vehículo ${vehicle['chassis']} tuvo reapertura de OT: ${dto.reason}`,
+        body: `${vehicle['chassis']} — Reapertura: ${dto.reason}. Accesorios: ${accessoryLabels}`,
         vehicleId: dto.vehicleId,
         chassis: vehicle['chassis'] as string,
       }),
     ]);
 
-    return { orderId, orderNumber, isReopening: true };
+    this.logger.log(`Reapertura solicitada para vehículo ${dto.vehicleId} por ${user.uid}`);
+    return {
+      vehicleId: dto.vehicleId,
+      newStatus: VehicleStatus.DOCUMENTACION_PENDIENTE,
+      isReopening: true,
+      reopenAccessories: dto.newAccessories,
+      reason: dto.reason,
+    };
   }
 
   async getPredictions(vehicleId: string) {

@@ -64,12 +64,14 @@ export class ServiceOrdersController {
   @ApiOperation({
     summary: 'Reabrir Orden de Trabajo',
     description:
-      'Solo desde EN_INSTALACION o LISTO_PARA_ENTREGA. Crea una nueva OT referenciando la anterior (previousOrderId), ' +
-      'cambia estado a REAPERTURA_OT con el motivo en statusHistory. ' +
-      'Notifica a JEFE_TALLER y LIDER_TECNICO. **Roles:** ASESOR, LIDER_TECNICO, JEFE_TALLER, SOPORTE',
+      'Solo desde EN_INSTALACION, INSTALACION_COMPLETA o LISTO_PARA_ENTREGA. ' +
+      'Registra los accesorios solicitados y el motivo en el vehículo, cambia estado a DOCUMENTACION_PENDIENTE ' +
+      'para que el asesor actualice la documentación (PATCH). Al completar la documentación, el vehículo vuelve a ASIGNADO ' +
+      'y los nuevos accesorios se agregan al checklist de la OT existente. ' +
+      'Notifica a ASESOR, JEFE_TALLER y LIDER_TECNICO. **Roles:** ASESOR, LIDER_TECNICO, JEFE_TALLER, SOPORTE',
   })
   @ApiBody({ type: ReopenOrderDto })
-  @ApiResponse({ status: 201, description: 'Reapertura creada. Retorna orderId, orderNumber, isReopening: true' })
+  @ApiResponse({ status: 201, description: 'Reapertura iniciada. Retorna vehicleId, newStatus: DOCUMENTACION_PENDIENTE, isReopening: true, reopenAccessories, reason' })
   @ApiResponse({ status: 400, description: 'Estado del vehículo no permite reapertura o newAccessories vacío/inválido' })
   @ApiResponse({ status: 403, description: 'Rol no autorizado' })
   @ApiResponse({ status: 404, description: 'Vehículo no encontrado' })

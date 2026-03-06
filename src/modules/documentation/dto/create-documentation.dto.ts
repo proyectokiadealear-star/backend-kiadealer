@@ -13,7 +13,6 @@ import { Transform, Type, plainToInstance } from 'class-transformer';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { AccessoryClassification } from '../../../common/enums/accessory-key.enum';
 import { PaymentMethod } from '../../../common/enums/payment-method.enum';
-import { IsEcuadorianCedula } from '../../../common/validators/ecuador-cedula.validator';
 
 export enum RegistrationType {
   NORMAL = 'NORMAL',
@@ -71,7 +70,6 @@ export class CreateDocumentationDto {
   @IsString()
   @IsNotEmpty()
   @Matches(/^\d{10}(\d{3})?$/, { message: 'La cédula debe tener 10 dígitos o el RUC 13 dígitos numéricos.' })
-  @IsEcuadorianCedula()
   @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
   clientId: string;
 

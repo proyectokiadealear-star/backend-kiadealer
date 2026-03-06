@@ -75,6 +75,7 @@ export class VehiclesService {
       status: VehicleStatus.POR_ARRIBAR,
       registeredDate: now,
       registrationSentDate: null,
+      registrationReceivedDate: null,
       receptionDate: null,
       certificationDate: null,
       documentationDate: null,

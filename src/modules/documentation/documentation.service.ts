@@ -379,6 +379,7 @@ export class DocumentationService {
     const isCompleting =
       saveAsPending === false &&
       vehicle['status'] === VehicleStatus.DOCUMENTACION_PENDIENTE;
+    const isReopening = !!vehicle['isReopening'];
 
     const now = this.firebase.serverTimestamp();
     const updates: Record<string, unknown> = {
@@ -454,6 +455,101 @@ export class DocumentationService {
     }
 
     await this.db.collection('documentations').doc(vehicleId).update(updates);
+
+    if (isCompleting && isReopening) {
+      // ── REAPERTURA: Completar documentación → ASIGNADO (la OT ya existe) ──
+      const reopenAccessories: string[] = vehicle['reopenAccessories'] ?? [];
+      const reopenReason: string = vehicle['reopenReason'] ?? '';
+      const reopenBy: string = vehicle['reopenRequestedByName'] ?? '';
+
+      // Buscar la OT existente del vehículo y agregar los nuevos accesorios al checklist
+      const orderSnap = await this.db
+        .collection('service-orders')
+        .where('vehicleId', '==', vehicleId)
+        .get();
+
+      const sortedOrders = orderSnap.docs
+        .map((d) => ({ id: d.id, ...d.data() }))
+        .sort((a, b) => ((b as any)['createdAt']?._seconds ?? 0) - ((a as any)['createdAt']?._seconds ?? 0));
+
+      if (sortedOrders.length > 0) {
+        const currentOrder = sortedOrders[0] as Record<string, unknown>;
+        const existingChecklist: Array<{ key: string; installed: boolean }> =
+          Array.isArray(currentOrder['checklist']) ? (currentOrder['checklist'] as any) : [];
+        const existingAccessories: Array<{ key: string; classification: string }> =
+          Array.isArray(currentOrder['accessories']) ? (currentOrder['accessories'] as any) : [];
+        const existingKeys = new Set(existingChecklist.map((c) => c.key));
+
+        // Agregar solo los accesorios nuevos que no estaban ya en la OT
+        const newChecklistItems = reopenAccessories
+          .filter((key) => !existingKeys.has(key))
+          .map((key) => ({ key, installed: false }));
+        const newAccessoryItems = reopenAccessories
+          .filter((key) => !existingKeys.has(key))
+          .map((key) => ({ key, classification: 'VENDIDO' }));
+
+        await this.db.collection('service-orders').doc(currentOrder['id'] as string).update({
+          checklist: [...existingChecklist, ...newChecklistItems],
+          accessories: [...existingAccessories, ...newAccessoryItems],
+          status: 'ASIGNADA',
+          updatedAt: now,
+        });
+      }
+
+      // Limpiar flags de reapertura del vehículo
+      await this.db.collection('vehicles').doc(vehicleId).update({
+        isReopening: false,
+        reopenReason: null,
+        reopenAccessories: null,
+        reopenRequestedBy: null,
+        reopenRequestedByName: null,
+        reopenRequestedAt: null,
+      });
+
+      const accessoryLabels = reopenAccessories.join(', ');
+      await this.vehiclesService.changeStatus(
+        vehicleId,
+        VehicleStatus.ASIGNADO,
+        user,
+        {
+          notes: `Reapertura completada por ${user.displayName ?? user.email}. Accesorios agregados: ${accessoryLabels}. Motivo original: ${reopenReason} (solicitado por ${reopenBy})${updatedFiles.length ? '. Archivos: ' + updatedFiles.join(', ') : ''}`,
+        },
+      );
+
+      // Notificar al líder técnico y personal de taller que la OT fue actualizada
+      await Promise.all([
+        this.notificationsService.notify({
+          type: 'REAPERTURA_COMPLETADA',
+          targetRole: RoleEnum.LIDER_TECNICO,
+          targetSede: vehicle['sede'],
+          title: '🔄 Reapertura completada — OT actualizada',
+          body: `${vehicle['chassis']}: se agregaron accesorios (${accessoryLabels}). Motivo: ${reopenReason}`,
+          vehicleId,
+          chassis: vehicle['chassis'] as string,
+        }),
+        this.notificationsService.notify({
+          type: 'REAPERTURA_COMPLETADA',
+          targetRole: RoleEnum.PERSONAL_TALLER,
+          targetSede: vehicle['sede'],
+          title: '🔄 Reapertura completada — Nuevos accesorios por instalar',
+          body: `${vehicle['chassis']}: nuevos accesorios agregados (${accessoryLabels}). Revisa tu checklist.`,
+          vehicleId,
+          chassis: vehicle['chassis'] as string,
+        }),
+        this.notificationsService.notify({
+          type: 'REAPERTURA_COMPLETADA',
+          targetRole: RoleEnum.JEFE_TALLER,
+          targetSede: 'ALL',
+          title: '🔄 Reapertura completada',
+          body: `${vehicle['chassis']}: reapertura resuelta. Accesorios: ${accessoryLabels}`,
+          vehicleId,
+          chassis: vehicle['chassis'] as string,
+        }),
+      ]);
+
+      this.logger.log(`Reapertura COMPLETADA para vehículo ${vehicleId} por ${user.uid}`);
+      return { vehicleId, updated: true, newStatus: VehicleStatus.ASIGNADO, isReopening: true, addedAccessories: reopenAccessories };
+    }
 
     if (isCompleting) {
       // Transición real de estado: DOCUMENTACION_PENDIENTE → DOCUMENTADO
