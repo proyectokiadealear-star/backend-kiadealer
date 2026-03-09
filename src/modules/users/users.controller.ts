@@ -32,7 +32,7 @@ export class UsersController {
 
   @Get()
   @ApiOperation({ summary: 'Listar usuarios' })
-  @Roles(RoleEnum.JEFE_TALLER, RoleEnum.LIDER_TECNICO)
+  @Roles(RoleEnum.JEFE_TALLER, RoleEnum.DOCUMENTACION ,RoleEnum.LIDER_TECNICO)
   findAll(
     @Query('role') role?: RoleEnum,
     @Query('sede') sede?: SedeEnum,
