@@ -44,6 +44,24 @@ export class SeedController {
    *
    * ⚠️  Este endpoint debe deshabilitarse o eliminarse en producción.
    */
+  /**
+   * POST /seed/users
+   *
+   * Restaura el jefe de taller en Firebase Auth y Firestore.
+   * Es idempotente: si ya existe en Auth, solo sincroniza claims y Firestore.
+   */
+  @Post('users')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Restaurar jefe de taller',
+    description:
+      'Crea (o restaura) el usuario jefe de taller en Firebase Auth y Firestore. ' +
+      'Idempotente: si ya existe en Auth, solo actualiza claims.',
+  })
+  seedUsers(@Body() dto: RunSeedDto) {
+    return this.seedService.runSeedUsers(dto.secretKey);
+  }
+
   @Post('run')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({

@@ -62,6 +62,69 @@ export class SeedService {
   // ──────────────────────────────────────────────────────────────────────
   // ENTRY POINT
   // ──────────────────────────────────────────────────────────────────────
+
+  /** Expuesto para el endpoint POST /seed/users — restaura solo el jefe de taller */
+  async runSeedUsers(secretKey: string): Promise<Record<string, unknown>> {
+    this.validateSeedKey(secretKey);
+
+    const u: SeedUser = {
+      displayName: 'Carlos Mendoza',
+      email: 'jefe.taller@kiadealer.com',
+      password: 'KiaDealer2024!',
+      role: RoleEnum.JEFE_TALLER,
+      sede: SedeEnum.ALL,
+    };
+
+    try {
+      let userRecord: { uid: string };
+      let wasNew = false;
+
+      try {
+        userRecord = await this.firebase.auth().getUserByEmail(u.email);
+        this.logger.warn(`⏩ Usuario ya existe en Auth: ${u.email}`);
+      } catch (notFound: any) {
+        if (notFound?.code !== 'auth/user-not-found') throw notFound;
+        userRecord = await this.firebase.auth().createUser({
+          email: u.email,
+          displayName: u.displayName,
+          password: u.password,
+          emailVerified: true,
+        });
+        wasNew = true;
+      }
+
+      await this.firebase.auth().setCustomUserClaims(userRecord.uid, {
+        role: u.role,
+        sede: u.sede,
+        active: true,
+      });
+
+      const firestoreRef  = this.db.collection('users').doc(userRecord.uid);
+      const firestoreSnap = await firestoreRef.get();
+      if (!firestoreSnap.exists) {
+        const now = this.firebase.serverTimestamp();
+        await firestoreRef.set({
+          uid: userRecord.uid,
+          displayName: u.displayName,
+          email: u.email,
+          role: u.role,
+          sede: u.sede,
+          active: true,
+          fcmTokens: [],
+          createdAt: now,
+          updatedAt: now,
+          createdBy: 'seed',
+        });
+      }
+
+      this.logger.log(wasNew ? `👤 Jefe de taller creado: ${u.email}` : `⏩ Jefe de taller ya existía: ${u.email}`);
+      return { created: wasNew, email: u.email, role: u.role, uid: userRecord.uid };
+    } catch (err: any) {
+      this.logger.error(`❌ Error restaurando jefe de taller: ${err.message}`);
+      throw err;
+    }
+  }
+
   async runSeed(secretKey: string, options: { clear?: boolean } = {}): Promise<Record<string, unknown>> {
     this.validateSeedKey(secretKey);
 

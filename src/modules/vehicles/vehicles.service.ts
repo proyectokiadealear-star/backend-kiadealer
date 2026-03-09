@@ -12,7 +12,10 @@ import { QueryVehiclesDto } from './dto/query-vehicles.dto';
 import { VehicleStatus } from '../../common/enums/vehicle-status.enum';
 import { SedeEnum } from '../../common/enums/sede.enum';
 import { RoleEnum } from '../../common/enums/role.enum';
-import { AccessoryKey, AccessoryClassification } from '../../common/enums/accessory-key.enum';
+import {
+  AccessoryKey,
+  AccessoryClassification,
+} from '../../common/enums/accessory-key.enum';
 import { AuthenticatedUser } from '../../common/interfaces/authenticated-user.interface';
 import { NotificationsService } from '../notifications/notifications.service';
 import { v4 as uuidv4 } from 'uuid';
@@ -33,10 +36,7 @@ export class VehiclesService {
   // ──────────────────────────────────────────────────────────────────
   // CREATE
   // ──────────────────────────────────────────────────────────────────
-  async create(
-    dto: CreateVehicleDto,
-    user: AuthenticatedUser,
-  ) {
+  async create(dto: CreateVehicleDto, user: AuthenticatedUser) {
     // 1. Validar chasis único
     const existing = await this.db
       .collection('vehicles')
@@ -45,7 +45,9 @@ export class VehiclesService {
       .get();
 
     if (!existing.empty) {
-      throw new BadRequestException(`El chasis '${dto.chassis}' ya existe en el sistema`);
+      throw new BadRequestException(
+        `El chasis '${dto.chassis}' ya existe en el sistema`,
+      );
     }
 
     // 2. Validar año dinámicamente (resiliente: siempre usa el año actual al momento del request)
@@ -102,7 +104,9 @@ export class VehiclesService {
       `Vehículo registrado por ${user.displayName ?? user.email} — Chasis: ${dto.chassis}, Modelo: ${dto.model}, Año: ${dto.year}`,
     );
 
-    this.logger.log(`Vehículo creado: ${vehicleId} (${dto.chassis}) por ${user.uid}`);
+    this.logger.log(
+      `Vehículo creado: ${vehicleId} (${dto.chassis}) por ${user.uid}`,
+    );
 
     // Notificar creación de vehículo
     await Promise.all([
@@ -140,7 +144,9 @@ export class VehiclesService {
   /** Signed URL válida por 7 días — se cachea en el doc del vehículo. */
   private readonly PHOTO_URL_TTL_MS = 6 * 24 * 60 * 60 * 1000; // 6 días (renueva antes de expirar)
 
-  private async resolvePhotoUrl(vehicle: Record<string, unknown>): Promise<Record<string, unknown>> {
+  private async resolvePhotoUrl(
+    vehicle: Record<string, unknown>,
+  ): Promise<Record<string, unknown>> {
     if (!vehicle.photoUrl) return vehicle;
 
     const cached = vehicle.photoSignedUrl as string | undefined;
@@ -156,10 +162,16 @@ export class VehiclesService {
       const url = await this.firebase.getSignedUrl(path);
       const expiresAt = Date.now() + this.PHOTO_URL_TTL_MS;
       // Fire-and-forget: no bloquea la respuesta
-      this.db.collection('vehicles').doc(vehicle.id as string).update({
-        photoSignedUrl: url,
-        photoUrlExpiresAt: expiresAt,
-      }).catch(() => { /* ignore write errors */ });
+      this.db
+        .collection('vehicles')
+        .doc(vehicle.id as string)
+        .update({
+          photoSignedUrl: url,
+          photoUrlExpiresAt: expiresAt,
+        })
+        .catch(() => {
+          /* ignore write errors */
+        });
       return { ...vehicle, photoUrl: url };
     } catch {
       return vehicle;
@@ -198,7 +210,10 @@ export class VehiclesService {
       const snapshot = await ref.get();
       vehicles = snapshot.docs
         .map((d) => d.data())
-        .sort((a, b) => (b['createdAt']?._seconds ?? 0) - (a['createdAt']?._seconds ?? 0));
+        .sort(
+          (a, b) =>
+            (b['createdAt']?._seconds ?? 0) - (a['createdAt']?._seconds ?? 0),
+        );
 
       if (query.chassis) {
         const chassisLower = query.chassis.toLowerCase();
@@ -231,14 +246,19 @@ export class VehiclesService {
         const snapshot = await ref.get();
         vehicles = snapshot.docs
           .map((d) => d.data())
-          .sort((a, b) => (b['createdAt']?._seconds ?? 0) - (a['createdAt']?._seconds ?? 0));
+          .sort(
+            (a, b) =>
+              (b['createdAt']?._seconds ?? 0) - (a['createdAt']?._seconds ?? 0),
+          );
         total = vehicles.length;
         vehicles = vehicles.slice(start, start + limit);
       }
     }
 
     // Resolver URLs de fotos (usa caché, no regenera en cada request)
-    const data = await Promise.all(vehicles.map((v) => this.resolvePhotoUrl(v as Record<string, unknown>)));
+    const data = await Promise.all(
+      vehicles.map((v) => this.resolvePhotoUrl(v as Record<string, unknown>)),
+    );
 
     return { data, total, page, limit };
   }
@@ -253,10 +273,7 @@ export class VehiclesService {
     const vehicle = doc.data()!;
 
     // Control de sede
-    if (
-      user.role !== RoleEnum.JEFE_TALLER &&
-      vehicle['sede'] !== user.sede
-    ) {
+    if (user.role !== RoleEnum.JEFE_TALLER && vehicle['sede'] !== user.sede) {
       throw new ForbiddenException('No tienes acceso a este vehículo');
     }
 
@@ -283,12 +300,18 @@ export class VehiclesService {
   // ──────────────────────────────────────────────────────────────────
   // UPDATE (JEFE_TALLER / SOPORTE)
   // ──────────────────────────────────────────────────────────────────
-  async update(id: string, dto: UpdateVehicleDto, photoFile?: Express.Multer.File) {
+  async update(
+    id: string,
+    dto: UpdateVehicleDto,
+    photoFile?: Express.Multer.File,
+  ) {
     await this.assertExists(id);
 
     // Filtrar undefined — Firestore lanza error si recibe campos undefined
     const updates: Record<string, unknown> = {
-      ...Object.fromEntries(Object.entries(dto).filter(([, v]) => v !== undefined)),
+      ...Object.fromEntries(
+        Object.entries(dto).filter(([, v]) => v !== undefined),
+      ),
       updatedAt: this.firebase.serverTimestamp(),
     };
     delete updates['photoBase64'];
@@ -297,10 +320,17 @@ export class VehiclesService {
     if (photoFile) {
       const storagePath = `vehicles/${id}/photo.jpg`;
       await this.firebase.deleteFile(storagePath);
-      await this.firebase.uploadBuffer(photoFile.buffer, storagePath, photoFile.mimetype);
+      await this.firebase.uploadBuffer(
+        photoFile.buffer,
+        storagePath,
+        photoFile.mimetype,
+      );
       updates['photoUrl'] = await this.firebase.getSignedUrl(storagePath);
     } else if (dto.photoBase64) {
-      const base64Data = dto.photoBase64.replace(/^data:image\/\w+;base64,/, '');
+      const base64Data = dto.photoBase64.replace(
+        /^data:image\/\w+;base64,/,
+        '',
+      );
       const buffer = Buffer.from(base64Data, 'base64');
       const storagePath = `vehicles/${id}/photo.jpg`;
       await this.firebase.deleteFile(storagePath);
@@ -322,13 +352,17 @@ export class VehiclesService {
     await this.firebase.deleteFile(`vehicles/${id}/photo.jpg`).catch(() => {});
 
     // 2. Consultar en paralelo todas las colecciones relacionadas
-    const [serviceOrdersSnap, appointmentsSnap, notificationsSnap, statusHistorySnap] =
-      await Promise.all([
-        this.db.collection('service-orders').where('vehicleId', '==', id).get(),
-        this.db.collection('appointments').where('vehicleId', '==', id).get(),
-        this.db.collection('notifications').where('vehicleId', '==', id).get(),
-        this.db.collection('vehicles').doc(id).collection('statusHistory').get(),
-      ]);
+    const [
+      serviceOrdersSnap,
+      appointmentsSnap,
+      notificationsSnap,
+      statusHistorySnap,
+    ] = await Promise.all([
+      this.db.collection('service-orders').where('vehicleId', '==', id).get(),
+      this.db.collection('appointments').where('vehicleId', '==', id).get(),
+      this.db.collection('notifications').where('vehicleId', '==', id).get(),
+      this.db.collection('vehicles').doc(id).collection('statusHistory').get(),
+    ]);
 
     // 3. Construir lista de todas las referencias a eliminar
     const refs: FirebaseFirestore.DocumentReference[] = [
@@ -477,33 +511,61 @@ export class VehiclesService {
   async getSalePotential(vehicleId: string) {
     const vehicle = await this.assertExists(vehicleId);
 
-    const docSnap = await this.db.collection('documentations').doc(vehicleId).get();
+    const docSnap = await this.db
+      .collection('documentations')
+      .doc(vehicleId)
+      .get();
     if (!docSnap.exists) {
-      throw new BadRequestException('El vehículo no tiene documentación registrada — no se puede calcular potencial de venta');
+      throw new BadRequestException(
+        'El vehículo no tiene documentación registrada — no se puede calcular potencial de venta',
+      );
     }
 
     const rawAccessories: Array<{ key: string; classification: string }> =
-      docSnap.data()!['accessories'] ?? [];
+      Array.isArray(docSnap.data()!['accessories'])
+        ? docSnap.data()!['accessories']
+        : [];
 
     // Excluir "otros" del cálculo — no es un accesorio vendible calculable
-    const accessories = rawAccessories.filter((a) => a.key !== AccessoryKey.OTROS);
-    const totalAccessories = Object.values(AccessoryKey).filter((k) => k !== AccessoryKey.OTROS).length; // 13
+    const accessories = rawAccessories.filter(
+      (a) => a.key !== AccessoryKey.OTROS,
+    );
+    const totalAccessories = Object.values(AccessoryKey).filter(
+      (k) => k !== AccessoryKey.OTROS,
+    ).length; // 13
 
-    const sold = accessories.filter((a) => a.classification === AccessoryClassification.VENDIDO).length;
-    const gifted = accessories.filter((a) => a.classification === AccessoryClassification.OBSEQUIADO).length;
-    const notApplicable = accessories.filter((a) => a.classification === AccessoryClassification.NO_APLICA).length;
+    const sold = accessories.filter(
+      (a) => a.classification === AccessoryClassification.VENDIDO,
+    ).length;
+    const gifted = accessories.filter(
+      (a) => a.classification === AccessoryClassification.OBSEQUIADO,
+    ).length;
+    const notApplicable = accessories.filter(
+      (a) => a.classification === AccessoryClassification.NO_APLICA,
+    ).length;
     const acquired = sold + gifted;
 
-    const currentSaleRate = Math.round((acquired / totalAccessories) * 10000) / 100;
-    const potentialSaleRate = Math.round(((totalAccessories - acquired) / totalAccessories) * 10000) / 100;
+    const currentSaleRate =
+      Math.round((acquired / totalAccessories) * 10000) / 100;
+    const potentialSaleRate =
+      Math.round(((totalAccessories - acquired) / totalAccessories) * 10000) /
+      100;
 
     // Predicción ponderada: buscar patrones en otros vehículos
     const soldKeys = accessories
-      .filter((a) => a.classification === AccessoryClassification.VENDIDO || a.classification === AccessoryClassification.OBSEQUIADO)
+      .filter(
+        (a) =>
+          a.classification === AccessoryClassification.VENDIDO ||
+          a.classification === AccessoryClassification.OBSEQUIADO,
+      )
       .map((a) => a.key);
 
     let weightedPotentialRate = 0;
-    let highPotentialItems: Array<{ key: string; probability: number; reason: string }> = [];
+    let highPotentialItems: Array<{
+      key: string;
+      probability: number;
+      reason: string;
+    }> = [];
 
     if (soldKeys.length > 0) {
       const allDocsSnap = await this.db.collection('documentations').get();
@@ -512,29 +574,42 @@ export class VehiclesService {
         .map((d) => {
           const raw = d.data()?.['accessories'];
           return Array.isArray(raw)
-            ? (raw as Array<{ key: string; classification: string }>).filter((a) => a.key !== AccessoryKey.OTROS)
+            ? (raw as Array<{ key: string; classification: string }>).filter(
+                (a) => a.key !== AccessoryKey.OTROS,
+              )
             : [];
         })
         .filter((acc) => acc.length > 0);
 
       const similar = allDocs.filter((acc) => {
         const soldInDoc = acc
-          .filter((a) => a.classification === AccessoryClassification.VENDIDO || a.classification === AccessoryClassification.OBSEQUIADO)
+          .filter(
+            (a) =>
+              a.classification === AccessoryClassification.VENDIDO ||
+              a.classification === AccessoryClassification.OBSEQUIADO,
+          )
           .map((a) => a.key);
         return soldKeys.some((k) => soldInDoc.includes(k));
       });
 
       if (similar.length > 0) {
-        const notAcquiredKeys = Object.values(AccessoryKey)
-          .filter((k) => k !== AccessoryKey.OTROS && !soldKeys.includes(k));
+        const notAcquiredKeys = Object.values(AccessoryKey).filter(
+          (k) => k !== AccessoryKey.OTROS && !soldKeys.includes(k),
+        );
 
-        const predictions: Array<{ key: string; probability: number; reason: string }> = [];
+        const predictions: Array<{
+          key: string;
+          probability: number;
+          reason: string;
+        }> = [];
 
         for (const key of notAcquiredKeys) {
           const count = similar.filter((acc) =>
             acc.some(
-              (a) => a.key === key &&
-                (a.classification === AccessoryClassification.VENDIDO || a.classification === AccessoryClassification.OBSEQUIADO),
+              (a) =>
+                a.key === key &&
+                (a.classification === AccessoryClassification.VENDIDO ||
+                  a.classification === AccessoryClassification.OBSEQUIADO),
             ),
           ).length;
 
@@ -553,8 +628,12 @@ export class VehiclesService {
 
         // Promedio ponderado: solo las predicciones > 0, escalado sobre el total de no adquiridos
         if (predictions.length > 0) {
-          const sumProbabilities = predictions.reduce((s, p) => s + p.probability, 0);
-          weightedPotentialRate = Math.round((sumProbabilities / predictions.length) * 100) / 100;
+          const sumProbabilities = predictions.reduce(
+            (s, p) => s + p.probability,
+            0,
+          );
+          weightedPotentialRate =
+            Math.round((sumProbabilities / predictions.length) * 100) / 100;
         }
       }
     }
@@ -584,22 +663,30 @@ export class VehiclesService {
     }
 
     // 1. Obtener documentaciones de los vehículos solicitados
-    const docRefs = vehicleIds.map((id) => this.db.collection('documentations').doc(id));
+    const docRefs = vehicleIds.map((id) =>
+      this.db.collection('documentations').doc(id),
+    );
     const docSnaps = await this.db.getAll(...docRefs);
 
     // 2. Un SOLO scan de toda la colección para predicciones
     const allDocsSnap = await this.db.collection('documentations').get();
-    const allAccessories = allDocsSnap.docs.map((d) => {
-      const raw = d.data()?.['accessories'];
-      return {
-        id: d.id,
-        accessories: Array.isArray(raw)
-          ? (raw as Array<{ key: string; classification: string }>).filter((a) => a.key !== AccessoryKey.OTROS)
-          : [],
-      };
-    }).filter((d) => d.accessories.length > 0);
+    const allAccessories = allDocsSnap.docs
+      .map((d) => {
+        const raw = d.data()?.['accessories'];
+        return {
+          id: d.id,
+          accessories: Array.isArray(raw)
+            ? (raw as Array<{ key: string; classification: string }>).filter(
+                (a) => a.key !== AccessoryKey.OTROS,
+              )
+            : [],
+        };
+      })
+      .filter((d) => d.accessories.length > 0);
 
-    const totalAccessoriesBase = Object.values(AccessoryKey).filter((k) => k !== AccessoryKey.OTROS).length;
+    const totalAccessoriesBase = Object.values(AccessoryKey).filter(
+      (k) => k !== AccessoryKey.OTROS,
+    ).length;
 
     // 3. Calcular para cada vehículo
     const results: Array<{
@@ -611,7 +698,11 @@ export class VehiclesService {
       currentSaleRate: number;
       potentialSaleRate: number;
       weightedPotentialRate: number;
-      highPotentialItems: Array<{ key: string; probability: number; reason: string }>;
+      highPotentialItems: Array<{
+        key: string;
+        probability: number;
+        reason: string;
+      }>;
     }> = [];
 
     for (let i = 0; i < vehicleIds.length; i++) {
@@ -621,44 +712,77 @@ export class VehiclesService {
       if (!snap.exists) continue;
 
       const rawAccessories: Array<{ key: string; classification: string }> =
-        snap.data()!['accessories'] ?? [];
-      const accessories = rawAccessories.filter((a) => a.key !== AccessoryKey.OTROS);
+        Array.isArray(snap.data()!['accessories'])
+          ? snap.data()!['accessories']
+          : [];
+      const accessories = rawAccessories.filter(
+        (a) => a.key !== AccessoryKey.OTROS,
+      );
 
-      const sold = accessories.filter((a) => a.classification === AccessoryClassification.VENDIDO).length;
-      const gifted = accessories.filter((a) => a.classification === AccessoryClassification.OBSEQUIADO).length;
-      const notApplicable = accessories.filter((a) => a.classification === AccessoryClassification.NO_APLICA).length;
+      const sold = accessories.filter(
+        (a) => a.classification === AccessoryClassification.VENDIDO,
+      ).length;
+      const gifted = accessories.filter(
+        (a) => a.classification === AccessoryClassification.OBSEQUIADO,
+      ).length;
+      const notApplicable = accessories.filter(
+        (a) => a.classification === AccessoryClassification.NO_APLICA,
+      ).length;
       const acquired = sold + gifted;
 
-      const currentSaleRate = Math.round((acquired / totalAccessoriesBase) * 10000) / 100;
-      const potentialSaleRate = Math.round(((totalAccessoriesBase - acquired) / totalAccessoriesBase) * 10000) / 100;
+      const currentSaleRate =
+        Math.round((acquired / totalAccessoriesBase) * 10000) / 100;
+      const potentialSaleRate =
+        Math.round(
+          ((totalAccessoriesBase - acquired) / totalAccessoriesBase) * 10000,
+        ) / 100;
 
       const soldKeys = accessories
-        .filter((a) => a.classification === AccessoryClassification.VENDIDO || a.classification === AccessoryClassification.OBSEQUIADO)
+        .filter(
+          (a) =>
+            a.classification === AccessoryClassification.VENDIDO ||
+            a.classification === AccessoryClassification.OBSEQUIADO,
+        )
         .map((a) => a.key);
 
       let weightedPotentialRate = 0;
-      let highPotentialItems: Array<{ key: string; probability: number; reason: string }> = [];
+      let highPotentialItems: Array<{
+        key: string;
+        probability: number;
+        reason: string;
+      }> = [];
 
       if (soldKeys.length > 0) {
         const others = allAccessories.filter((d) => d.id !== vehicleId);
         const similar = others.filter((d) => {
           const soldInDoc = d.accessories
-            .filter((a) => a.classification === AccessoryClassification.VENDIDO || a.classification === AccessoryClassification.OBSEQUIADO)
+            .filter(
+              (a) =>
+                a.classification === AccessoryClassification.VENDIDO ||
+                a.classification === AccessoryClassification.OBSEQUIADO,
+            )
             .map((a) => a.key);
           return soldKeys.some((k) => soldInDoc.includes(k));
         });
 
         if (similar.length > 0) {
-          const notAcquiredKeys = Object.values(AccessoryKey)
-            .filter((k) => k !== AccessoryKey.OTROS && !soldKeys.includes(k));
+          const notAcquiredKeys = Object.values(AccessoryKey).filter(
+            (k) => k !== AccessoryKey.OTROS && !soldKeys.includes(k),
+          );
 
-          const predictions: Array<{ key: string; probability: number; reason: string }> = [];
+          const predictions: Array<{
+            key: string;
+            probability: number;
+            reason: string;
+          }> = [];
 
           for (const key of notAcquiredKeys) {
             const count = similar.filter((d) =>
               d.accessories.some(
-                (a) => a.key === key &&
-                  (a.classification === AccessoryClassification.VENDIDO || a.classification === AccessoryClassification.OBSEQUIADO),
+                (a) =>
+                  a.key === key &&
+                  (a.classification === AccessoryClassification.VENDIDO ||
+                    a.classification === AccessoryClassification.OBSEQUIADO),
               ),
             ).length;
             const probability = Math.round((count / similar.length) * 100);
@@ -675,8 +799,12 @@ export class VehiclesService {
           highPotentialItems = predictions.filter((p) => p.probability >= 40);
 
           if (predictions.length > 0) {
-            const sumProbabilities = predictions.reduce((s, p) => s + p.probability, 0);
-            weightedPotentialRate = Math.round((sumProbabilities / predictions.length) * 100) / 100;
+            const sumProbabilities = predictions.reduce(
+              (s, p) => s + p.probability,
+              0,
+            );
+            weightedPotentialRate =
+              Math.round((sumProbabilities / predictions.length) * 100) / 100;
           }
         }
       }

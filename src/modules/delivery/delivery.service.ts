@@ -117,7 +117,7 @@ export class DeliveryService {
 
   async getCeremony(vehicleId: string) {
     const doc = await this.db.collection('deliveryCeremonies').doc(vehicleId).get();
-    if (!doc.exists) throw new NotFoundException('Ceremonia de entrega no encontrada');
+    if (!doc.exists) return null;
 
     const data = doc.data() as Record<string, any>;
 
