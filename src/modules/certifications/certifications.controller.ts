@@ -39,19 +39,44 @@ export class CertificationsController {
   // ── CREATE ──────────────────────────────────────────────────────
   @Post(':vehicleId')
   @ApiOperation({
-    summary: 'Registrar certificación interna/externa del vehículo',
+    summary: 'Registrar o actualizar certificación del vehículo (upsert)',
     description:
-      'El vehículo debe estar en estado DOCUMENTADO. Sube la foto del vehículo y la foto de aros a Firebase Storage y cambia el estado a CERTIFICADO_STOCK. Guarda originConcessionaire y receptionDate en el vehículo. Dispara notificaciones condicionales por kilometraje alto y falta de improntas. **Roles:** ASESOR, LIDER_TECNICO, PERSONAL_TALLER, JEFE_TALLER, SOPORTE',
+      'Si el vehículo está en DOCUMENTADO y sin certificación previa: crea la certificación y avanza el estado a CERTIFICADO_STOCK (flujo normal). ' +
+      'Si el vehículo ya tiene certificación o ya está en CERTIFICADO_STOCK / EN_PREPARACION / LISTO_PARA_ENTREGA / ENTREGADO (ej: datos del seed): ' +
+      'actualiza los campos de certificación sin cambiar el estado ni re-disparar notificaciones (modo upsert/re-patch). ' +
+      'Sube la foto del vehículo y la foto de aros a Firebase Storage cuando se adjuntan. **Roles:** ASESOR, LIDER_TECNICO, PERSONAL_TALLER, JEFE_TALLER, SOPORTE',
   })
-  @ApiParam({ name: 'vehicleId', description: 'ID del vehículo a certificar (UUID)' })
+  @ApiParam({
+    name: 'vehicleId',
+    description: 'ID del vehículo a certificar (UUID)',
+  })
   @ApiConsumes('multipart/form-data', 'application/json')
   @ApiBody({ type: CreateCertificationDto })
-  @ApiResponse({ status: 201, description: 'Certificación registrada y vehículo en CERTIFICADO_STOCK' })
-  @ApiResponse({ status: 400, description: 'Vehículo no está en DOCUMENTADO o ya tiene certificación' })
+  @ApiResponse({
+    status: 201,
+    description:
+      'Certificación registrada (nueva) y vehículo en CERTIFICADO_STOCK',
+  })
+  @ApiResponse({
+    status: 201,
+    description:
+      'Certificación actualizada (upsert) — estado del vehículo no cambia',
+  })
+  @ApiResponse({
+    status: 400,
+    description:
+      'Vehículo está en un estado previo a DOCUMENTADO (ej: POR_ARRIBAR)',
+  })
   @ApiResponse({ status: 401, description: 'Token inválido o ausente' })
   @ApiResponse({ status: 403, description: 'Rol no autorizado' })
   @ApiResponse({ status: 404, description: 'Vehículo no encontrado' })
-  @Roles(RoleEnum.ASESOR, RoleEnum.LIDER_TECNICO, RoleEnum.PERSONAL_TALLER, RoleEnum.JEFE_TALLER, RoleEnum.SOPORTE)
+  @Roles(
+    RoleEnum.ASESOR,
+    RoleEnum.LIDER_TECNICO,
+    RoleEnum.PERSONAL_TALLER,
+    RoleEnum.JEFE_TALLER,
+    RoleEnum.SOPORTE,
+  )
   @UseInterceptors(
     FileFieldsInterceptor([
       { name: 'vehiclePhoto', maxCount: 1 },
@@ -78,7 +103,8 @@ export class CertificationsController {
   @Get(':vehicleId')
   @ApiOperation({
     summary: 'Obtener certificación de un vehículo',
-    description: 'Retorna los datos de certificación con URL firmada fresca para la foto de aros. **Roles:** todos',
+    description:
+      'Retorna los datos de certificación con URL firmada fresca para la foto de aros. **Roles:** todos',
   })
   @ApiParam({ name: 'vehicleId', description: 'ID del vehículo (UUID)' })
   @ApiResponse({ status: 200, description: 'Datos de certificación' })
@@ -100,7 +126,13 @@ export class CertificationsController {
   @ApiResponse({ status: 200, description: 'Certificación actualizada' })
   @ApiResponse({ status: 403, description: 'Rol no autorizado' })
   @ApiResponse({ status: 404, description: 'Certificación no encontrada' })
-  @Roles(RoleEnum.DOCUMENTACION, RoleEnum.ASESOR, RoleEnum.LIDER_TECNICO, RoleEnum.JEFE_TALLER, RoleEnum.SOPORTE)
+  @Roles(
+    RoleEnum.DOCUMENTACION,
+    RoleEnum.ASESOR,
+    RoleEnum.LIDER_TECNICO,
+    RoleEnum.JEFE_TALLER,
+    RoleEnum.SOPORTE,
+  )
   @UseInterceptors(
     FileFieldsInterceptor([
       { name: 'vehiclePhoto', maxCount: 1 },
@@ -127,10 +159,14 @@ export class CertificationsController {
   @Delete(':vehicleId')
   @ApiOperation({
     summary: 'Eliminar certificación',
-    description: 'Elimina la certificación y revierte el vehículo a DOCUMENTADO con nota en el historial de estados. **Roles:** JEFE_TALLER, SOPORTE',
+    description:
+      'Elimina la certificación y revierte el vehículo a DOCUMENTADO con nota en el historial de estados. **Roles:** JEFE_TALLER, SOPORTE',
   })
   @ApiParam({ name: 'vehicleId', description: 'ID del vehículo (UUID)' })
-  @ApiResponse({ status: 200, description: 'Certificación eliminada y vehículo revertido a DOCUMENTADO' })
+  @ApiResponse({
+    status: 200,
+    description: 'Certificación eliminada y vehículo revertido a DOCUMENTADO',
+  })
   @ApiResponse({ status: 403, description: 'Rol no autorizado' })
   @ApiResponse({ status: 404, description: 'Certificación no encontrada' })
   @Roles(RoleEnum.JEFE_TALLER, RoleEnum.SOPORTE)
@@ -141,4 +177,3 @@ export class CertificationsController {
     return this.svc.remove(vehicleId, user);
   }
 }
-
