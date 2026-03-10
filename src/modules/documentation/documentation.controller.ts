@@ -398,6 +398,35 @@ export class DocumentationController {
     return this.svc.revertToPorArribar(vehicleId, dto, user);
   }
 
+  // ── FACTURAR VEHÍCULO NO_FACTURADO ─────────────────────────────────
+  @Patch(':vehicleId/bill')
+  @ApiOperation({
+    summary: 'Registrar factura de vehículo (NO_FACTURADO → POR_ARRIBAR)',
+    description:
+      'Registra la factura del vehículo, transicionándolo de NO_FACTURADO a POR_ARRIBAR ' +
+      'para que ingrese al flujo normal de matriculación. ' +
+      '**Roles:** DOCUMENTACION, JEFE_TALLER, SOPORTE',
+  })
+  @ApiParam({ name: 'vehicleId', description: 'ID del vehículo (UUID)' })
+  @ApiResponse({
+    status: 200,
+    description: 'Vehículo facturado. Estado cambiado a POR_ARRIBAR.',
+  })
+  @ApiResponse({
+    status: 400,
+    description: 'El vehículo no está en estado NO_FACTURADO.',
+  })
+  @ApiResponse({ status: 401, description: 'Token inválido o ausente' })
+  @ApiResponse({ status: 403, description: 'Rol no autorizado' })
+  @ApiResponse({ status: 404, description: 'Vehículo no encontrado' })
+  @Roles(RoleEnum.DOCUMENTACION, RoleEnum.JEFE_TALLER, RoleEnum.SOPORTE)
+  billVehicle(
+    @Param('vehicleId') vehicleId: string,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.svc.billVehicle(vehicleId, user);
+  }
+
   // ── CAMBIO DE SEDE ─────────────────────────────────────────────
   @Patch(':vehicleId/sede')
   @ApiOperation({

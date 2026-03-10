@@ -50,12 +50,27 @@ export class ServiceOrdersController {
       '**Roles:** ASESOR, LIDER_TECNICO, JEFE_TALLER, SOPORTE',
   })
   @ApiBody({ type: CreateServiceOrderDto })
-  @ApiResponse({ status: 201, description: 'OT creada. Retorna orderId, orderNumber, accessories y predictions' })
-  @ApiResponse({ status: 400, description: 'Vehículo no está DOCUMENTADO o no tiene documentación' })
+  @ApiResponse({
+    status: 201,
+    description:
+      'OT creada. Retorna orderId, orderNumber, accessories y predictions',
+  })
+  @ApiResponse({
+    status: 400,
+    description: 'Vehículo no está DOCUMENTADO o no tiene documentación',
+  })
   @ApiResponse({ status: 403, description: 'Rol no autorizado' })
   @ApiResponse({ status: 404, description: 'Vehículo no encontrado' })
-  @Roles(RoleEnum.ASESOR, RoleEnum.LIDER_TECNICO, RoleEnum.JEFE_TALLER, RoleEnum.SOPORTE)
-  create(@Body() dto: CreateServiceOrderDto, @CurrentUser() user: AuthenticatedUser) {
+  @Roles(
+    RoleEnum.ASESOR,
+    RoleEnum.LIDER_TECNICO,
+    RoleEnum.JEFE_TALLER,
+    RoleEnum.SOPORTE,
+  )
+  create(
+    @Body() dto: CreateServiceOrderDto,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
     return this.svc.create(dto, user);
   }
 
@@ -71,12 +86,28 @@ export class ServiceOrdersController {
       'Notifica a ASESOR, JEFE_TALLER y LIDER_TECNICO. **Roles:** ASESOR, LIDER_TECNICO, JEFE_TALLER, SOPORTE',
   })
   @ApiBody({ type: ReopenOrderDto })
-  @ApiResponse({ status: 201, description: 'Reapertura iniciada. Retorna vehicleId, newStatus: DOCUMENTACION_PENDIENTE, isReopening: true, reopenAccessories, reason' })
-  @ApiResponse({ status: 400, description: 'Estado del vehículo no permite reapertura o newAccessories vacío/inválido' })
+  @ApiResponse({
+    status: 201,
+    description:
+      'Reapertura iniciada. Retorna vehicleId, newStatus: DOCUMENTACION_PENDIENTE, isReopening: true, reopenAccessories, reason',
+  })
+  @ApiResponse({
+    status: 400,
+    description:
+      'Estado del vehículo no permite reapertura o newAccessories vacío/inválido',
+  })
   @ApiResponse({ status: 403, description: 'Rol no autorizado' })
   @ApiResponse({ status: 404, description: 'Vehículo no encontrado' })
-  @Roles(RoleEnum.ASESOR, RoleEnum.LIDER_TECNICO, RoleEnum.JEFE_TALLER, RoleEnum.SOPORTE)
-  reopenOrder(@Body() dto: ReopenOrderDto, @CurrentUser() user: AuthenticatedUser) {
+  @Roles(
+    RoleEnum.ASESOR,
+    RoleEnum.LIDER_TECNICO,
+    RoleEnum.JEFE_TALLER,
+    RoleEnum.SOPORTE,
+  )
+  reopenOrder(
+    @Body() dto: ReopenOrderDto,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
     return this.svc.reopenOrder(dto, user);
   }
 
@@ -88,11 +119,31 @@ export class ServiceOrdersController {
       'JEFE_TALLER ve todas las sedes. Otros roles sólo ven su propia sede. ' +
       'PERSONAL_TALLER solo verá OTs asignadas a su uid. **Roles:** todos',
   })
-  @ApiQuery({ name: 'sede', enum: SedeEnum, required: false, description: 'Filtrar por sede (solo JEFE_TALLER)' })
-  @ApiQuery({ name: 'status', required: false, description: 'Filtrar por status. Acepta uno o varios separados por coma: GENERADA,ASIGNADA,EN_INSTALACION,INSTALACION_COMPLETA,LISTO_PARA_ENTREGA,REAPERTURA_OT' })
-  @ApiQuery({ name: 'vehicleId', required: false, description: 'Filtrar por vehículo' })
+  @ApiQuery({
+    name: 'sede',
+    enum: SedeEnum,
+    required: false,
+    description: 'Filtrar por sede (solo JEFE_TALLER)',
+  })
+  @ApiQuery({
+    name: 'status',
+    required: false,
+    description:
+      'Filtrar por status. Acepta uno o varios separados por coma: GENERADA,ASIGNADA,EN_INSTALACION,INSTALACION_COMPLETA,LISTO_PARA_ENTREGA,REAPERTURA_OT',
+  })
+  @ApiQuery({
+    name: 'vehicleId',
+    required: false,
+    description: 'Filtrar por vehículo',
+  })
   @ApiResponse({ status: 200, description: 'Lista de órdenes de trabajo' })
-  @Roles(RoleEnum.ASESOR, RoleEnum.LIDER_TECNICO, RoleEnum.PERSONAL_TALLER, RoleEnum.JEFE_TALLER, RoleEnum.SOPORTE)
+  @Roles(
+    RoleEnum.ASESOR,
+    RoleEnum.LIDER_TECNICO,
+    RoleEnum.PERSONAL_TALLER,
+    RoleEnum.JEFE_TALLER,
+    RoleEnum.SOPORTE,
+  )
   findAll(
     @CurrentUser() user: AuthenticatedUser,
     @Query('sede') sede?: string,
@@ -112,9 +163,20 @@ export class ServiceOrdersController {
       '**Roles:** ASESOR, LIDER_TECNICO, JEFE_TALLER, SOPORTE',
   })
   @ApiParam({ name: 'vehicleId', description: 'ID del vehículo (UUID)' })
-  @ApiResponse({ status: 200, description: 'Lista de predicciones ordenadas por probabilidad descendente' })
-  @ApiResponse({ status: 404, description: 'Vehículo o documentación no encontrada' })
-  @Roles(RoleEnum.ASESOR, RoleEnum.LIDER_TECNICO, RoleEnum.JEFE_TALLER, RoleEnum.SOPORTE)
+  @ApiResponse({
+    status: 200,
+    description: 'Lista de predicciones ordenadas por probabilidad descendente',
+  })
+  @ApiResponse({
+    status: 404,
+    description: 'Vehículo o documentación no encontrada',
+  })
+  @Roles(
+    RoleEnum.ASESOR,
+    RoleEnum.LIDER_TECNICO,
+    RoleEnum.JEFE_TALLER,
+    RoleEnum.SOPORTE,
+  )
   getPredictions(@Param('vehicleId') vehicleId: string) {
     return this.svc.getPredictions(vehicleId);
   }
@@ -123,12 +185,19 @@ export class ServiceOrdersController {
   @Get(':id')
   @ApiOperation({
     summary: 'Detalle de una orden de trabajo',
-    description: 'Retorna la OT con checklist, accesorios, predicciones y datos del técnico asignado. **Roles:** todos',
+    description:
+      'Retorna la OT con checklist, accesorios, predicciones y datos del técnico asignado. **Roles:** todos',
   })
   @ApiParam({ name: 'id', description: 'ID de la orden de trabajo (UUID)' })
   @ApiResponse({ status: 200, description: 'Datos completos de la OT' })
   @ApiResponse({ status: 404, description: 'Orden de trabajo no encontrada' })
-  @Roles(RoleEnum.ASESOR, RoleEnum.LIDER_TECNICO, RoleEnum.PERSONAL_TALLER, RoleEnum.JEFE_TALLER, RoleEnum.SOPORTE)
+  @Roles(
+    RoleEnum.ASESOR,
+    RoleEnum.LIDER_TECNICO,
+    RoleEnum.PERSONAL_TALLER,
+    RoleEnum.JEFE_TALLER,
+    RoleEnum.SOPORTE,
+  )
   findOne(@Param('id') id: string) {
     return this.svc.findOne(id);
   }
@@ -138,20 +207,34 @@ export class ServiceOrdersController {
   @ApiOperation({
     summary: 'Asignar o reasignar técnico a la OT',
     description:
-      'OT debe estar en estado GENERADA o ASIGNADA. ' +
+      'OT debe estar en estado GENERADA, ASIGNADA o EN_INSTALACION. ' +
       'Si ya había un técnico previo, se detecta automáticamente como **reasignación**: ' +
       'el técnico anterior recibe notificación TECNICO_REMOVIDO, el nuevo recibe TECNICO_ASIGNADO, ' +
-      'y el historial registra la transición “X → Y”. ' +
+      'y el historial registra la transición "X → Y". ' +
+      'Si el vehículo ya avanzó a EN_INSTALACION o INSTALACION_COMPLETA, la reasignación actualiza el técnico ' +
+      'sin retroceder el estado del vehículo. ' +
       'Para listar técnicos disponibles usar **GET /users?role=PERSONAL_TALLER&sede={sede}&active=true**. ' +
       '**Roles:** LIDER_TECNICO, JEFE_TALLER, SOPORTE',
   })
   @ApiParam({ name: 'id', description: 'ID de la orden de trabajo (UUID)' })
   @ApiBody({ type: AssignTechnicianDto })
-  @ApiResponse({ status: 200, description: 'Técnico asignado/reasignado. Retorna orderId, assignedTechnicianId, isReassignment' })
-  @ApiResponse({ status: 400, description: 'La OT no está en estado GENERADA ni ASIGNADA' })
+  @ApiResponse({
+    status: 200,
+    description:
+      'Técnico asignado/reasignado. Retorna orderId, assignedTechnicianId, isReassignment',
+  })
+  @ApiResponse({
+    status: 400,
+    description: 'La OT no está en estado GENERADA, ASIGNADA ni EN_INSTALACION',
+  })
   @ApiResponse({ status: 403, description: 'Rol no autorizado' })
   @ApiResponse({ status: 404, description: 'Orden de trabajo no encontrada' })
-  @Roles(RoleEnum.LIDER_TECNICO, RoleEnum.JEFE_TALLER, RoleEnum.ASESOR, RoleEnum.SOPORTE)
+  @Roles(
+    RoleEnum.LIDER_TECNICO,
+    RoleEnum.JEFE_TALLER,
+    RoleEnum.ASESOR,
+    RoleEnum.SOPORTE,
+  )
   assignTechnician(
     @Param('id') id: string,
     @Body() dto: AssignTechnicianDto,
@@ -172,10 +255,23 @@ export class ServiceOrdersController {
   })
   @ApiParam({ name: 'id', description: 'ID de la orden de trabajo (UUID)' })
   @ApiBody({ type: UpdateChecklistDto })
-  @ApiResponse({ status: 200, description: 'Checklist actualizado. Incluye allInstalled, newOrderStatus, vehicleNewStatus' })
-  @ApiResponse({ status: 400, description: 'OT no está en estado ASIGNADA o EN_INSTALACION' })
-  @ApiResponse({ status: 403, description: 'No eres el técnico asignado a esta OT' })
-  @ApiResponse({ status: 404, description: 'Orden de trabajo o accesorio no encontrado' })
+  @ApiResponse({
+    status: 200,
+    description:
+      'Checklist actualizado. Incluye allInstalled, newOrderStatus, vehicleNewStatus',
+  })
+  @ApiResponse({
+    status: 400,
+    description: 'OT no está en estado ASIGNADA o EN_INSTALACION',
+  })
+  @ApiResponse({
+    status: 403,
+    description: 'No eres el técnico asignado a esta OT',
+  })
+  @ApiResponse({
+    status: 404,
+    description: 'Orden de trabajo o accesorio no encontrado',
+  })
   @Roles(RoleEnum.PERSONAL_TALLER, RoleEnum.JEFE_TALLER, RoleEnum.SOPORTE)
   updateChecklist(
     @Param('id') id: string,
@@ -195,13 +291,18 @@ export class ServiceOrdersController {
       '**Roles:** LIDER_TECNICO, JEFE_TALLER, SOPORTE',
   })
   @ApiParam({ name: 'id', description: 'ID de la orden de trabajo (UUID)' })
-  @ApiResponse({ status: 200, description: 'Estado actualizado a LISTO_PARA_ENTREGA y ASESOR notificado' })
+  @ApiResponse({
+    status: 200,
+    description: 'Estado actualizado a LISTO_PARA_ENTREGA y ASESOR notificado',
+  })
   @ApiResponse({ status: 400, description: 'Instalación no está completa aún' })
   @ApiResponse({ status: 403, description: 'Rol no autorizado' })
   @ApiResponse({ status: 404, description: 'Orden de trabajo no encontrada' })
   @Roles(RoleEnum.LIDER_TECNICO, RoleEnum.JEFE_TALLER, RoleEnum.SOPORTE)
-  markReadyForDelivery(@Param('id') id: string, @CurrentUser() user: AuthenticatedUser) {
+  markReadyForDelivery(
+    @Param('id') id: string,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
     return this.svc.markReadyForDelivery(id, user);
   }
 }
-

@@ -1053,6 +1053,52 @@ export class DocumentationService {
     return { vehicleId, newStatus: VehicleStatus.POR_ARRIBAR, previousStatus };
   }
 
+  /**
+   * Factura un vehículo en estado NO_FACTURADO, transicionándolo a POR_ARRIBAR
+   * para que ingrese al flujo normal de matriculación.
+   */
+  async billVehicle(
+    vehicleId: string,
+    user: AuthenticatedUser,
+  ): Promise<{ vehicleId: string; newStatus: VehicleStatus }> {
+    const vehicle = await this.vehiclesService.assertExists(vehicleId);
+
+    if (vehicle['status'] !== VehicleStatus.NO_FACTURADO) {
+      throw new BadRequestException(
+        `El vehículo debe estar en estado NO_FACTURADO para facturar. Estado actual: ${vehicle['status']}`,
+      );
+    }
+
+    await this.vehiclesService.changeStatus(
+      vehicleId,
+      VehicleStatus.POR_ARRIBAR,
+      user,
+      {
+        notes: `Vehículo facturado por ${user.displayName ?? user.email} — ingresa al flujo normal de matriculación`,
+        extraFields: {
+          billedAt: this.firebase.serverTimestamp(),
+          billedBy: user.uid,
+        },
+      },
+    );
+
+    await this.notificationsService.notify({
+      type: 'ESTADO_CAMBIADO',
+      targetRole: RoleEnum.DOCUMENTACION,
+      targetSede: vehicle['sede'],
+      title: '💳 Vehículo facturado',
+      body: `El vehículo ${vehicle['chassis']} fue facturado y está listo para matriculación`,
+      vehicleId,
+      chassis: vehicle['chassis'] as string,
+    });
+
+    this.logger.log(
+      `Vehículo ${vehicleId} facturado por ${user.uid} — transición NO_FACTURADO → POR_ARRIBAR`,
+    );
+
+    return { vehicleId, newStatus: VehicleStatus.POR_ARRIBAR };
+  }
+
   async changeSede(
     vehicleId: string,
     newSede: string,

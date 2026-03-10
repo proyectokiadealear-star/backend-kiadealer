@@ -16,7 +16,10 @@ import {
 } from './dto/service-order.dto';
 import { VehicleStatus } from '../../common/enums/vehicle-status.enum';
 import { RoleEnum } from '../../common/enums/role.enum';
-import { AccessoryClassification, AccessoryKey } from '../../common/enums/accessory-key.enum';
+import {
+  AccessoryClassification,
+  AccessoryKey,
+} from '../../common/enums/accessory-key.enum';
 import { AuthenticatedUser } from '../../common/interfaces/authenticated-user.interface';
 import { v4 as uuidv4 } from 'uuid';
 import { SedeEnum } from '../../common/enums/sede.enum';
@@ -44,26 +47,41 @@ export class ServiceOrdersService {
   async create(dto: CreateServiceOrderDto, user: AuthenticatedUser) {
     const vehicle = await this.vehiclesService.assertExists(dto.vehicleId);
 
-    if (vehicle['status'] !== VehicleStatus.CERTIFICADO_STOCK) {
+    const isCertifiedNoFacturado =
+      vehicle['status'] === VehicleStatus.DOCUMENTADO &&
+      vehicle['certifiedWhileNoFacturado'] === true;
+    if (
+      vehicle['status'] !== VehicleStatus.CERTIFICADO_STOCK &&
+      !isCertifiedNoFacturado
+    ) {
       throw new BadRequestException(
-        `El vehículo debe estar CERTIFICADO_STOCK para generar OT. Estado actual: ${vehicle['status']}`,
+        `El vehículo debe estar CERTIFICADO_STOCK o DOCUMENTADO (con certificación previa) para generar OT. Estado actual: ${vehicle['status']}`,
       );
     }
 
     // Obtener accesorios vendidos/obsequiados de documentación
     let docSnap: FirebaseFirestore.DocumentSnapshot;
     try {
-      docSnap = await this.db.collection('documentations').doc(dto.vehicleId).get();
+      docSnap = await this.db
+        .collection('documentations')
+        .doc(dto.vehicleId)
+        .get();
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
-      this.logger.error(`Error leyendo documentación de Firestore para vehículo ${dto.vehicleId}: ${msg}`);
+      this.logger.error(
+        `Error leyendo documentación de Firestore para vehículo ${dto.vehicleId}: ${msg}`,
+      );
       throw err;
     }
-    if (!docSnap.exists) throw new BadRequestException('El vehículo no tiene documentación registrada');
+    if (!docSnap.exists)
+      throw new BadRequestException(
+        'El vehículo no tiene documentación registrada',
+      );
 
     const docData = docSnap.data()!;
     const rawAccessories = docData['accessories'];
-    const accessories: Array<{ key: string; classification: string }> = Array.isArray(rawAccessories) ? rawAccessories : [];
+    const accessories: Array<{ key: string; classification: string }> =
+      Array.isArray(rawAccessories) ? rawAccessories : [];
     const orderAccessories = accessories.filter(
       (a) =>
         a.classification === AccessoryClassification.VENDIDO ||
@@ -71,11 +89,16 @@ export class ServiceOrdersService {
     );
 
     // Algoritmo de predicción
-    const predictions = await this.runPrediction(orderAccessories, dto.vehicleId);
+    const predictions = await this.runPrediction(
+      orderAccessories,
+      dto.vehicleId,
+    );
 
     const orderId = uuidv4();
     // Usar número de orden proporcionado por el usuario, o generar uno automáticamente como fallback
-    const orderNumber = dto.orderNumber?.trim() || this.generateOrderNumber(vehicle['sede'] as string);
+    const orderNumber =
+      dto.orderNumber?.trim() ||
+      this.generateOrderNumber(vehicle['sede'] as string);
     const now = this.firebase.serverTimestamp();
 
     const orderData = {
@@ -86,7 +109,10 @@ export class ServiceOrdersService {
       chassis: vehicle['chassis'],
       accessories: orderAccessories,
       predictions,
-      checklist: orderAccessories.map((a) => ({ key: a.key, installed: false })),
+      checklist: orderAccessories.map((a) => ({
+        key: a.key,
+        installed: false,
+      })),
       assignedTechnicianId: null,
       assignedTechnicianName: null,
       assignedAt: null,
@@ -101,10 +127,18 @@ export class ServiceOrdersService {
 
     await this.db.collection('service-orders').doc(orderId).set(orderData);
 
-    await this.vehiclesService.changeStatus(dto.vehicleId, VehicleStatus.ORDEN_GENERADA, user, {
-      notes: `OT ${orderNumber} generada por ${user.displayName ?? user.email}`,
-      extraFields: { currentOrderId: orderId, currentOrderNumber: orderNumber },
-    });
+    await this.vehiclesService.changeStatus(
+      dto.vehicleId,
+      VehicleStatus.ORDEN_GENERADA,
+      user,
+      {
+        notes: `OT ${orderNumber} generada por ${user.displayName ?? user.email}`,
+        extraFields: {
+          currentOrderId: orderId,
+          currentOrderNumber: orderNumber,
+        },
+      },
+    );
 
     await Promise.all([
       this.notificationsService.notify({
@@ -132,7 +166,10 @@ export class ServiceOrdersService {
     return { orderId, orderNumber, accessories: orderAccessories, predictions };
   }
 
-  async findAll(user: AuthenticatedUser, filters?: { sede?: string; status?: string; vehicleId?: string }) {
+  async findAll(
+    user: AuthenticatedUser,
+    filters?: { sede?: string; status?: string; vehicleId?: string },
+  ) {
     let query: FirebaseFirestore.Query = this.db.collection('service-orders');
 
     // PERSONAL_TALLER solo ve sus OTs asignadas
@@ -156,8 +193,13 @@ export class ServiceOrdersService {
 
     if (filters?.status) {
       // Soporta múltiples status separados por coma: ?status=ASIGNADA,EN_INSTALACION
-      const statusList = filters.status.split(',').map((s) => s.trim()).filter(Boolean);
-      results = results.filter((d) => statusList.includes(d['status'] as string));
+      const statusList = filters.status
+        .split(',')
+        .map((s) => s.trim())
+        .filter(Boolean);
+      results = results.filter((d) =>
+        statusList.includes(d['status'] as string),
+      );
     }
     if (filters?.vehicleId) {
       results = results.filter((d) => d['vehicleId'] === filters.vehicleId);
@@ -168,28 +210,44 @@ export class ServiceOrdersService {
 
   async findOne(id: string) {
     const doc = await this.db.collection('service-orders').doc(id).get();
-    if (!doc.exists) throw new NotFoundException('Orden de trabajo no encontrada');
+    if (!doc.exists)
+      throw new NotFoundException('Orden de trabajo no encontrada');
     return doc.data();
   }
 
-  async assignTechnician(orderId: string, dto: AssignTechnicianDto, user: AuthenticatedUser) {
-    if (user.role !== RoleEnum.LIDER_TECNICO && user.role !== RoleEnum.JEFE_TALLER && user.role !== RoleEnum.SOPORTE) {
-      throw new ForbiddenException('Solo el Líder Técnico puede asignar técnicos');
-    }
-
-    const order = await this.findOne(orderId);
-    const vehicle = await this.vehiclesService.assertExists(order!['vehicleId']);
-
-    const allowedOrderStatuses = ['GENERADA', 'ASIGNADA'];
-    if (!allowedOrderStatuses.includes(order!['status'])) {
-      throw new BadRequestException(
-        `La OT debe estar en estado GENERADA o ASIGNADA para asignar técnico. Estado actual: ${order!['status']}`,
+  async assignTechnician(
+    orderId: string,
+    dto: AssignTechnicianDto,
+    user: AuthenticatedUser,
+  ) {
+    if (
+      user.role !== RoleEnum.LIDER_TECNICO &&
+      user.role !== RoleEnum.JEFE_TALLER &&
+      user.role !== RoleEnum.SOPORTE
+    ) {
+      throw new ForbiddenException(
+        'Solo el Líder Técnico puede asignar técnicos',
       );
     }
 
-    const previousTechnicianId: string | null = order!['assignedTechnicianId'] ?? null;
-    const previousTechnicianName: string | null = order!['assignedTechnicianName'] ?? null;
-    const isReassignment = !!previousTechnicianId && previousTechnicianId !== dto.technicianUid;
+    const order = await this.findOne(orderId);
+    const vehicle = await this.vehiclesService.assertExists(
+      order!['vehicleId'],
+    );
+
+    const allowedOrderStatuses = ['GENERADA', 'ASIGNADA', 'EN_INSTALACION'];
+    if (!allowedOrderStatuses.includes(order!['status'])) {
+      throw new BadRequestException(
+        `La OT debe estar en estado GENERADA, ASIGNADA o EN_INSTALACION para asignar técnico. Estado actual: ${order!['status']}`,
+      );
+    }
+
+    const previousTechnicianId: string | null =
+      order!['assignedTechnicianId'] ?? null;
+    const previousTechnicianName: string | null =
+      order!['assignedTechnicianName'] ?? null;
+    const isReassignment =
+      !!previousTechnicianId && previousTechnicianId !== dto.technicianUid;
 
     await this.db.collection('service-orders').doc(orderId).update({
       assignedTechnicianId: dto.technicianUid,
@@ -203,10 +261,41 @@ export class ServiceOrdersService {
       ? `Técnico reasignado: ${previousTechnicianName} → ${dto.technicianName} por ${user.displayName ?? user.email}`
       : `Técnico asignado: ${dto.technicianName} por ${user.displayName ?? user.email}`;
 
-    await this.vehiclesService.changeStatus(order!['vehicleId'], VehicleStatus.ASIGNADO, user, {
-      notes: historyNote,
-      extraFields: { assignedTechnicianId: dto.technicianUid, assignedTechnicianName: dto.technicianName },
-    });
+    const currentVehicleStatus = vehicle['status'] as VehicleStatus;
+    const vehicleAlreadyAdvanced =
+      currentVehicleStatus === VehicleStatus.EN_INSTALACION ||
+      currentVehicleStatus === VehicleStatus.INSTALACION_COMPLETA;
+
+    if (vehicleAlreadyAdvanced) {
+      // El vehículo ya avanzó más allá de ASIGNADO — solo actualizamos los campos
+      // del técnico sin retroceder ni re-escribir el estado
+      await this.db.collection('vehicles').doc(order!['vehicleId']).update({
+        assignedTechnicianId: dto.technicianUid,
+        assignedTechnicianName: dto.technicianName,
+        updatedAt: this.firebase.serverTimestamp(),
+      });
+      await this.vehiclesService.addStatusHistory(
+        order!['vehicleId'],
+        currentVehicleStatus,
+        currentVehicleStatus,
+        user,
+        order!['sede'],
+        historyNote,
+      );
+    } else {
+      await this.vehiclesService.changeStatus(
+        order!['vehicleId'],
+        VehicleStatus.ASIGNADO,
+        user,
+        {
+          notes: historyNote,
+          extraFields: {
+            assignedTechnicianId: dto.technicianUid,
+            assignedTechnicianName: dto.technicianName,
+          },
+        },
+      );
+    }
 
     const notifBody = `Se te asignó el vehículo ${vehicle['chassis']} para instalación`;
     const notifJobs: Promise<void>[] = [
@@ -240,11 +329,17 @@ export class ServiceOrdersService {
 
     await Promise.all(notifJobs);
 
-    this.logger.log(`${isReassignment ? 'Reasignación' : 'Asignación'} de técnico en OT ${orderId}: ${dto.technicianUid}`);
+    this.logger.log(
+      `${isReassignment ? 'Reasignación' : 'Asignación'} de técnico en OT ${orderId}: ${dto.technicianUid}`,
+    );
     return { orderId, assignedTechnicianId: dto.technicianUid, isReassignment };
   }
 
-  async updateChecklist(orderId: string, dto: UpdateChecklistDto, user: AuthenticatedUser) {
+  async updateChecklist(
+    orderId: string,
+    dto: UpdateChecklistDto,
+    user: AuthenticatedUser,
+  ) {
     const order = await this.findOne(orderId);
 
     const allowedOrderStatuses = ['ASIGNADA', 'EN_INSTALACION'];
@@ -254,19 +349,28 @@ export class ServiceOrdersService {
       );
     }
 
-    const isOverrideRole = user.role === RoleEnum.JEFE_TALLER || user.role === RoleEnum.SOPORTE;
+    const isOverrideRole =
+      user.role === RoleEnum.JEFE_TALLER || user.role === RoleEnum.SOPORTE;
     if (order!['assignedTechnicianId'] !== user.uid && !isOverrideRole) {
-      throw new ForbiddenException('Solo el técnico asignado puede marcar la instalación');
+      throw new ForbiddenException(
+        'Solo el técnico asignado puede marcar la instalación',
+      );
     }
 
-    const checklist: Array<{ key: string; installed: boolean }> = order!['checklist'] ?? [];
+    const checklist: Array<{ key: string; installed: boolean }> =
+      order!['checklist'] ?? [];
     const idx = checklist.findIndex((c) => c.key === dto.accessoryKey);
-    if (idx === -1) throw new NotFoundException(`Accesorio '${dto.accessoryKey}' no encontrado en la OT`);
+    if (idx === -1)
+      throw new NotFoundException(
+        `Accesorio '${dto.accessoryKey}' no encontrado en la OT`,
+      );
 
     checklist[idx].installed = dto.installed;
 
     const allInstalled = checklist.every((c) => c.installed);
-    const newOrderStatus = allInstalled ? 'INSTALACION_COMPLETA' : 'EN_INSTALACION';
+    const newOrderStatus = allInstalled
+      ? 'INSTALACION_COMPLETA'
+      : 'EN_INSTALACION';
 
     await this.db.collection('service-orders').doc(orderId).update({
       checklist,
@@ -286,7 +390,10 @@ export class ServiceOrdersService {
         ? `Instalación completada por ${user.displayName ?? user.email}`
         : `Accesorio '${dto.accessoryKey}' marcado como instalado por ${user.displayName ?? user.email}`,
       extraFields: allInstalled
-        ? { installationCompleteDate: this.firebase.serverTimestamp(), installedBy: user.uid }
+        ? {
+            installationCompleteDate: this.firebase.serverTimestamp(),
+            installedBy: user.uid,
+          }
         : {},
     });
 
@@ -325,19 +432,34 @@ export class ServiceOrdersService {
       });
     }
 
-    return { orderId, vehicleId, allInstalled, newOrderStatus, vehicleNewStatus };
+    return {
+      orderId,
+      vehicleId,
+      allInstalled,
+      newOrderStatus,
+      vehicleNewStatus,
+    };
   }
 
   async markReadyForDelivery(orderId: string, user: AuthenticatedUser) {
-    if (user.role !== RoleEnum.LIDER_TECNICO && user.role !== RoleEnum.JEFE_TALLER) {
-      throw new ForbiddenException('Solo el Líder Técnico puede marcar listo para entrega');
+    if (
+      user.role !== RoleEnum.LIDER_TECNICO &&
+      user.role !== RoleEnum.JEFE_TALLER
+    ) {
+      throw new ForbiddenException(
+        'Solo el Líder Técnico puede marcar listo para entrega',
+      );
     }
 
     const order = await this.findOne(orderId);
-    const vehicle = await this.vehiclesService.assertExists(order!['vehicleId']);
+    const vehicle = await this.vehiclesService.assertExists(
+      order!['vehicleId'],
+    );
 
     if (vehicle['status'] !== VehicleStatus.INSTALACION_COMPLETA) {
-      throw new BadRequestException('La instalación debe estar completa para marcar listo para entrega');
+      throw new BadRequestException(
+        'La instalación debe estar completa para marcar listo para entrega',
+      );
     }
 
     await this.db.collection('service-orders').doc(orderId).update({
@@ -345,9 +467,14 @@ export class ServiceOrdersService {
       updatedAt: this.firebase.serverTimestamp(),
     });
 
-    await this.vehiclesService.changeStatus(order!['vehicleId'], VehicleStatus.LISTO_PARA_ENTREGA, user, {
-      notes: `Instalación aprobada y marcada lista para entrega por ${user.displayName ?? user.email}`,
-    });
+    await this.vehiclesService.changeStatus(
+      order!['vehicleId'],
+      VehicleStatus.LISTO_PARA_ENTREGA,
+      user,
+      {
+        notes: `Instalación aprobada y marcada lista para entrega por ${user.displayName ?? user.email}`,
+      },
+    );
 
     await Promise.all([
       this.notificationsService.notify({
@@ -370,34 +497,52 @@ export class ServiceOrdersService {
       }),
     ]);
 
-    return { orderId, vehicleId: order!['vehicleId'], newStatus: VehicleStatus.LISTO_PARA_ENTREGA };
+    return {
+      orderId,
+      vehicleId: order!['vehicleId'],
+      newStatus: VehicleStatus.LISTO_PARA_ENTREGA,
+    };
   }
 
   async reopenOrder(dto: ReopenOrderDto, user: AuthenticatedUser) {
     const vehicle = await this.vehiclesService.assertExists(dto.vehicleId);
 
-    const allowedStatuses = [VehicleStatus.EN_INSTALACION, VehicleStatus.INSTALACION_COMPLETA, VehicleStatus.LISTO_PARA_ENTREGA];
+    const allowedStatuses = [
+      VehicleStatus.EN_INSTALACION,
+      VehicleStatus.INSTALACION_COMPLETA,
+      VehicleStatus.LISTO_PARA_ENTREGA,
+    ];
     if (!allowedStatuses.includes(vehicle['status'] as VehicleStatus)) {
-      throw new BadRequestException('Solo se puede reabrir desde EN_INSTALACION, INSTALACION_COMPLETA o LISTO_PARA_ENTREGA');
+      throw new BadRequestException(
+        'Solo se puede reabrir desde EN_INSTALACION, INSTALACION_COMPLETA o LISTO_PARA_ENTREGA',
+      );
     }
 
     const accessoryLabels = dto.newAccessories.join(', ');
     const now = this.firebase.serverTimestamp();
 
     // Guardar info de reapertura en el vehículo para que documentación la consuma
-    await this.db.collection('vehicles').doc(dto.vehicleId).update({
-      isReopening: true,
-      reopenReason: dto.reason,
-      reopenAccessories: dto.newAccessories,
-      reopenRequestedBy: user.uid,
-      reopenRequestedByName: user.displayName ?? user.email,
-      reopenRequestedAt: now,
-    });
+    await this.db
+      .collection('vehicles')
+      .doc(dto.vehicleId)
+      .update({
+        isReopening: true,
+        reopenReason: dto.reason,
+        reopenAccessories: dto.newAccessories,
+        reopenRequestedBy: user.uid,
+        reopenRequestedByName: user.displayName ?? user.email,
+        reopenRequestedAt: now,
+      });
 
     // Cambiar estado a DOCUMENTACION_PENDIENTE (el statusHistory registra el motivo)
-    await this.vehiclesService.changeStatus(dto.vehicleId, VehicleStatus.DOCUMENTACION_PENDIENTE, user, {
-      notes: `Reapertura por ${user.displayName ?? user.email}: ${dto.reason}. Accesorios solicitados: ${accessoryLabels}`,
-    });
+    await this.vehiclesService.changeStatus(
+      dto.vehicleId,
+      VehicleStatus.DOCUMENTACION_PENDIENTE,
+      user,
+      {
+        notes: `Reapertura por ${user.displayName ?? user.email}: ${dto.reason}. Accesorios solicitados: ${accessoryLabels}`,
+      },
+    );
 
     await Promise.all([
       this.notificationsService.notify({
@@ -429,7 +574,9 @@ export class ServiceOrdersService {
       }),
     ]);
 
-    this.logger.log(`Reapertura solicitada para vehículo ${dto.vehicleId} por ${user.uid}`);
+    this.logger.log(
+      `Reapertura solicitada para vehículo ${dto.vehicleId} por ${user.uid}`,
+    );
     return {
       vehicleId: dto.vehicleId,
       newStatus: VehicleStatus.DOCUMENTACION_PENDIENTE,
@@ -440,11 +587,15 @@ export class ServiceOrdersService {
   }
 
   async getPredictions(vehicleId: string) {
-    const docSnap = await this.db.collection('documentations').doc(vehicleId).get();
+    const docSnap = await this.db
+      .collection('documentations')
+      .doc(vehicleId)
+      .get();
     if (!docSnap.exists) return [];
 
     const raw = docSnap.data()!['accessories'];
-    const accessories: Array<{ key: string; classification: string }> = Array.isArray(raw) ? raw : [];
+    const accessories: Array<{ key: string; classification: string }> =
+      Array.isArray(raw) ? raw : [];
     return this.runPrediction(accessories, vehicleId);
   }
 
@@ -471,14 +622,20 @@ export class ServiceOrdersService {
       .filter((d) => d.id !== vehicleId)
       .map((d) => {
         const raw = d.data()?.['accessories'];
-        return Array.isArray(raw) ? (raw as Array<{ key: string; classification: string }>) : [];
+        return Array.isArray(raw)
+          ? (raw as Array<{ key: string; classification: string }>)
+          : [];
       })
       .filter((acc) => acc.length > 0); // descartar docs sin accesorios válidos
 
     // Encontrar vehículos con al menos las mismas keys vendidas
     const similar = allDocs.filter((acc) => {
       const soldInDoc = acc
-        .filter((a) => a.classification === AccessoryClassification.VENDIDO || a.classification === AccessoryClassification.OBSEQUIADO)
+        .filter(
+          (a) =>
+            a.classification === AccessoryClassification.VENDIDO ||
+            a.classification === AccessoryClassification.OBSEQUIADO,
+        )
         .map((a) => a.key);
       return soldKeys.some((k) => soldInDoc.includes(k));
     });
@@ -487,16 +644,23 @@ export class ServiceOrdersService {
 
     // Calcular probabilidad para accesorios no incluidos
     const allAccessoryKeys = Object.values(AccessoryKey) as string[];
-    const notCurrentKeys = allAccessoryKeys.filter((k) => !soldKeys.includes(k));
+    const notCurrentKeys = allAccessoryKeys.filter(
+      (k) => !soldKeys.includes(k),
+    );
 
-    const predictions: Array<{ key: string; probability: number; reason: string }> = [];
+    const predictions: Array<{
+      key: string;
+      probability: number;
+      reason: string;
+    }> = [];
 
     for (const key of notCurrentKeys) {
       const count = similar.filter((acc) =>
         acc.some(
           (a) =>
             a.key === key &&
-            (a.classification === AccessoryClassification.VENDIDO || a.classification === AccessoryClassification.OBSEQUIADO),
+            (a.classification === AccessoryClassification.VENDIDO ||
+              a.classification === AccessoryClassification.OBSEQUIADO),
         ),
       ).length;
 

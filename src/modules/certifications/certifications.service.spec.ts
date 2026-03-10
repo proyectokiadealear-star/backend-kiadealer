@@ -58,7 +58,10 @@ describe('CertificationsService', () => {
         CertificationsService,
         { provide: FirebaseService, useFactory: () => firebaseService },
         { provide: VehiclesService, useFactory: () => vehiclesService },
-        { provide: NotificationsService, useFactory: () => notificationsService },
+        {
+          provide: NotificationsService,
+          useFactory: () => notificationsService,
+        },
       ],
     }).compile();
 
@@ -67,10 +70,10 @@ describe('CertificationsService', () => {
 
   afterEach(() => jest.clearAllMocks());
 
-  it('should throw BadRequestException if vehicle is not RECEPCIONADO', async () => {
+  it('should throw BadRequestException if vehicle is not in an allowed certification status', async () => {
     vehiclesService.assertExists = jest.fn().mockResolvedValue({
       id: 'v1',
-      status: VehicleStatus.DOCUMENTADO, // wrong status
+      status: VehicleStatus.POR_ARRIBAR, // wrong status: neither DOCUMENTADO nor NO_FACTURADO
       sede: SedeEnum.SURMOTOR,
     });
 
@@ -85,7 +88,9 @@ describe('CertificationsService', () => {
       imprints: 'CON_IMPRONTAS',
     };
 
-    await expect(service.create('v1', dto as any, asesorUser)).rejects.toThrow(BadRequestException);
+    await expect(service.create('v1', dto as any, asesorUser)).rejects.toThrow(
+      BadRequestException,
+    );
   });
 
   it('should send KILOMETRAJE_ALTO notification when mileage > 10', async () => {

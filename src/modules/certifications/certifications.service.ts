@@ -72,12 +72,18 @@ export class CertificationsService {
     // ¿Necesita avanzar el estado? Solo si el doc existe pero el estado aún no avanzó
     const needsStatusAdvance = isUpsert && !alreadyInPostCertStatus;
 
-    // Solo bloquear si el vehículo está en un estado previo a DOCUMENTADO
-    if (!isUpsert && currentStatus !== VehicleStatus.DOCUMENTADO) {
+    // Solo bloquear si el vehículo está en un estado previo a DOCUMENTADO/NO_FACTURADO
+    const allowedStatuses = [
+      VehicleStatus.DOCUMENTADO,
+      VehicleStatus.NO_FACTURADO,
+    ];
+    if (!isUpsert && !allowedStatuses.includes(currentStatus)) {
       throw new BadRequestException(
-        `El vehículo debe estar en estado DOCUMENTADO para certificar. Estado actual: ${currentStatus}`,
+        `El vehículo debe estar en estado DOCUMENTADO o NO_FACTURADO para certificar. Estado actual: ${currentStatus}`,
       );
     }
+    const isNoFacturado =
+      !isUpsert && currentStatus === VehicleStatus.NO_FACTURADO;
 
     let rimsPhotoUrl: string | null = null;
     let vehiclePhotoUrl: string | null = null;
@@ -201,7 +207,7 @@ export class CertificationsService {
       };
     }
 
-    // ── CREATE: flujo normal (vehículo en DOCUMENTADO sin certificación previa) ──
+    // ── CREATE: flujo normal (vehículo en DOCUMENTADO o NO_FACTURADO sin certificación previa) ──
     const certData = {
       vehicleId,
       radio: dto.radio,
@@ -221,6 +227,52 @@ export class CertificationsService {
 
     await this.db.collection('certifications').doc(vehicleId).set(certData);
 
+    if (isNoFacturado) {
+      // ── Branch B: vehículo en NO_FACTURADO — NO cambiar status ──
+      await this.db
+        .collection('vehicles')
+        .doc(vehicleId)
+        .update({
+          certifiedWhileNoFacturado: true,
+          certificationDate: now,
+          certifiedBy: user.uid,
+          originConcessionaire: dto.originConcessionaire ?? null,
+          ...(vehiclePhotoUrl && { photoUrl: vehiclePhotoUrl }),
+        });
+
+      await this.vehiclesService.addStatusHistory(
+        vehicleId,
+        VehicleStatus.NO_FACTURADO,
+        VehicleStatus.NO_FACTURADO,
+        user,
+        vehicle['sede'],
+        `Certificado físicamente (sin factura) por ${user.displayName ?? user.email} — Km: ${dto.mileage}`,
+      );
+
+      await this.notificationsService.notify({
+        type: 'ESTADO_CAMBIADO',
+        targetRole: RoleEnum.DOCUMENTACION,
+        targetSede: vehicle['sede'],
+        title: '⚠️ Vehículo certificado sin factura',
+        body: `El vehículo ${vehicle['chassis']} fue certificado físicamente pero aún no tiene factura`,
+        vehicleId,
+        chassis: vehicle['chassis'] as string,
+      });
+
+      this.logger.log(
+        `Certificación creada (NO_FACTURADO branch) para vehículo ${vehicleId}`,
+      );
+
+      return {
+        vehicleId,
+        upserted: false,
+        newStatus: VehicleStatus.NO_FACTURADO,
+        certifiedWhileNoFacturado: true,
+        certificationDate: new Date().toISOString(),
+      };
+    }
+
+    // ── Branch A: flujo normal (DOCUMENTADO) — avanzar a CERTIFICADO_STOCK ──
     // Cambiar estado del vehículo a CERTIFICADO_STOCK + guardar datos de recepción
     await this.vehiclesService.changeStatus(
       vehicleId,
@@ -440,6 +492,13 @@ export class CertificationsService {
     const doc = await this.db.collection('certifications').doc(vehicleId).get();
     if (!doc.exists) throw new NotFoundException('Certificación no encontrada');
 
+    // Leer el vehículo ANTES de eliminar el cert doc (necesario para el branch)
+    const vehicle = await this.vehiclesService.assertExists(vehicleId);
+
+    const isNoFacturadoBranch =
+      vehicle['certifiedWhileNoFacturado'] === true &&
+      vehicle['status'] === VehicleStatus.NO_FACTURADO;
+
     // Eliminar foto de aros de Firebase Storage
     await this.firebase
       .deleteFile(`vehicles/${vehicleId}/rims-photo.jpg`)
@@ -448,16 +507,34 @@ export class CertificationsService {
     // Eliminar el documento de certificación
     await this.db.collection('certifications').doc(vehicleId).delete();
 
-    // Revertir el vehículo a DOCUMENTADO para que pueda ser re-certificado
-    await this.vehiclesService.changeStatus(
-      vehicleId,
-      VehicleStatus.DOCUMENTADO,
-      user,
-      {
-        notes: `Certificación eliminada por ${user.displayName ?? user.email} — requiere re-certificación`,
-        extraFields: { certificationDate: null, certifiedBy: null },
-      },
-    );
+    if (isNoFacturadoBranch) {
+      // Branch B: limpiar flag, el vehículo SE QUEDA en NO_FACTURADO
+      await this.db.collection('vehicles').doc(vehicleId).update({
+        certifiedWhileNoFacturado: false,
+        certificationDate: null,
+        certifiedBy: null,
+      });
+
+      await this.vehiclesService.addStatusHistory(
+        vehicleId,
+        VehicleStatus.NO_FACTURADO,
+        VehicleStatus.NO_FACTURADO,
+        user,
+        vehicle['sede'],
+        'Certificación eliminada — vehículo requiere re-certificación antes de continuar',
+      );
+    } else {
+      // Branch A: comportamiento anterior — revertir a DOCUMENTADO
+      await this.vehiclesService.changeStatus(
+        vehicleId,
+        VehicleStatus.DOCUMENTADO,
+        user,
+        {
+          notes: `Certificación eliminada por ${user.displayName ?? user.email} — requiere re-certificación`,
+          extraFields: { certificationDate: null, certifiedBy: null },
+        },
+      );
+    }
 
     this.logger.log(
       `Certificación eliminada para vehículo ${vehicleId} por ${user.uid}`,

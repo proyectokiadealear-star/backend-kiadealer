@@ -62,9 +62,13 @@ export class VehiclesService {
     const sede = dto.sede ?? user.sede;
     const vehicleId = uuidv4();
 
-    // 4. Crear documento Vehicle — registro contable (POR_ARRIBAR)
+    // 4. Crear documento Vehicle — registro contable
     //    La foto y el concesionario de origen se registran en la certificación física.
     const now = this.firebase.serverTimestamp();
+    const initialStatus =
+      dto.isFacturado === false
+        ? VehicleStatus.NO_FACTURADO
+        : VehicleStatus.POR_ARRIBAR;
     const vehicleData = {
       id: vehicleId,
       chassis: dto.chassis,
@@ -74,7 +78,8 @@ export class VehiclesService {
       originConcessionaire: null,
       photoUrl: null,
       sede,
-      status: VehicleStatus.POR_ARRIBAR,
+      status: initialStatus,
+      certifiedWhileNoFacturado: false,
       registeredDate: now,
       registrationSentDate: null,
       registrationReceivedDate: null,
@@ -98,7 +103,7 @@ export class VehiclesService {
     await this.addStatusHistory(
       vehicleId,
       null,
-      VehicleStatus.POR_ARRIBAR,
+      initialStatus,
       user,
       sede,
       `Vehículo registrado por ${user.displayName ?? user.email} — Chasis: ${dto.chassis}, Modelo: ${dto.model}, Año: ${dto.year}`,
@@ -133,7 +138,7 @@ export class VehiclesService {
     return {
       id: vehicleId,
       chassis: dto.chassis,
-      status: VehicleStatus.POR_ARRIBAR,
+      status: initialStatus,
     };
   }
 

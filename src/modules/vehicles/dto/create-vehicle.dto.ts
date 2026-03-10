@@ -4,6 +4,7 @@ import {
   IsNumber,
   IsOptional,
   IsEnum,
+  IsBoolean,
   Matches,
   Min,
   Max,
@@ -28,7 +29,9 @@ export class CreateVehicleDto {
   })
   @IsString()
   @IsNotEmpty()
-  @Transform(({ value }) => (typeof value === 'string' ? value.toUpperCase().trim() : value))
+  @Transform(({ value }) =>
+    typeof value === 'string' ? value.toUpperCase().trim() : value,
+  )
   @Matches(/^[A-Z0-9]{6,20}$/, {
     message:
       'Chasis inválido. Debe tener entre 6 y 20 caracteres alfanuméricos (A-Z, 0-9). ' +
@@ -37,12 +40,15 @@ export class CreateVehicleDto {
   chassis: string;
 
   @ApiProperty({
-    description: 'Modelo del vehículo (selector desde catálogo). Se almacena en MAYUSCULAS.',
+    description:
+      'Modelo del vehículo (selector desde catálogo). Se almacena en MAYUSCULAS.',
     example: 'SPORTAGE',
   })
   @IsString()
   @IsNotEmpty()
-  @Transform(({ value }) => (typeof value === 'string' ? value.toUpperCase().trim() : value))
+  @Transform(({ value }) =>
+    typeof value === 'string' ? value.toUpperCase().trim() : value,
+  )
   model: string;
 
   @ApiProperty({
@@ -56,12 +62,15 @@ export class CreateVehicleDto {
   year: number;
 
   @ApiProperty({
-    description: 'Color del vehículo (selector desde catálogo). Se almacena en MAYUSCULAS.',
+    description:
+      'Color del vehículo (selector desde catálogo). Se almacena en MAYUSCULAS.',
     example: 'BLANCO PERLA',
   })
   @IsString()
   @IsNotEmpty()
-  @Transform(({ value }) => (typeof value === 'string' ? value.toUpperCase().trim() : value))
+  @Transform(({ value }) =>
+    typeof value === 'string' ? value.toUpperCase().trim() : value,
+  )
   color: string;
 
   @ApiPropertyOptional({
@@ -71,6 +80,19 @@ export class CreateVehicleDto {
     example: 'SURMOTOR',
   })
   @IsOptional()
-  @IsEnum(SedeEnum, { message: 'Sede inválida. Valores permitidos: SURMOTOR, SHYRIS, GRANDA_CENTENO' })
+  @IsEnum(SedeEnum, {
+    message:
+      'Sede inválida. Valores permitidos: SURMOTOR, SHYRIS, GRANDA_CENTENO',
+  })
   sede?: SedeEnum;
+
+  @ApiPropertyOptional({
+    description:
+      'Si se envía como false, el vehículo se registra en estado NO_FACTURADO (sin factura del importador). ' +
+      'Por defecto true (vehículo ya facturado → POR_ARRIBAR).',
+    default: true,
+  })
+  @IsOptional()
+  @IsBoolean()
+  isFacturado?: boolean;
 }

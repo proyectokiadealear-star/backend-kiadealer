@@ -60,6 +60,8 @@ export class AppointmentsService {
       chassis: vehicle['chassis'],
       model: vehicle['model'],
       sede: vehicle['sede'],
+      clientName: vehicle['clientName'] ?? null,
+      clientId: vehicle['clientId'] ?? null,
       scheduledDate: dto.scheduledDate,
       scheduledTime: dto.scheduledTime,
       assignedAdvisorId: dto.assignedAdvisorId,
@@ -143,6 +145,26 @@ export class AppointmentsService {
 
     if (dateFrom) docs = docs.filter((d) => d['scheduledDate'] >= dateFrom);
     if (dateTo) docs = docs.filter((d) => d['scheduledDate'] <= dateTo);
+
+    // ── Retrocompatibilidad: enriquecer docs legacy que no tienen clientName/clientId ──
+    // Sólo se hace una lectura de vehículo por cada apt que le falte el campo.
+    const missing = docs.filter((d) => d['clientName'] === undefined && d['vehicleId']);
+    if (missing.length > 0) {
+      const vehicleIds = [...new Set(missing.map((d) => d['vehicleId'] as string))];
+      const vehicleSnaps = await Promise.all(
+        vehicleIds.map((vid) => this.db.collection('vehicles').doc(vid).get()),
+      );
+      const vehicleMap = new Map(
+        vehicleSnaps.filter((s) => s.exists).map((s) => [s.id, s.data()]),
+      );
+      docs = docs.map((d) => {
+        if (d['clientName'] !== undefined) return d;
+        const v = vehicleMap.get(d['vehicleId'] as string);
+        if (!v) return d;
+        return { ...d, clientName: v['clientName'] ?? null, clientId: v['clientId'] ?? null };
+      });
+    }
+    // ─────────────────────────────────────────────────────────────────────────────────
 
     return docs;
   }

@@ -26,4 +26,5 @@ export enum VehicleStatus {
   // ESTADOS DE EXCEPCIÓN
   REAPERTURA_OT = 'REAPERTURA_OT',
   CEDIDO = 'CEDIDO',
+  NO_FACTURADO = 'NO_FACTURADO',
 }
