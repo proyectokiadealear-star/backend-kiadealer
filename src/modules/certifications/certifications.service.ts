@@ -62,8 +62,15 @@ export class CertificationsService {
       VehicleStatus.CEDIDO,
     ];
 
-    const isUpsert =
-      existing.exists || postCertificationStatuses.includes(currentStatus);
+    // Ya tiene doc de certificación en Firestore
+    const certDocExists = existing.exists;
+    // El estado ya está en una fase post-certificación
+    const alreadyInPostCertStatus =
+      postCertificationStatuses.includes(currentStatus);
+    // isUpsert: cualquier combinación donde no sea un CREATE puro
+    const isUpsert = certDocExists || alreadyInPostCertStatus;
+    // ¿Necesita avanzar el estado? Solo si el doc existe pero el estado aún no avanzó
+    const needsStatusAdvance = isUpsert && !alreadyInPostCertStatus;
 
     // Solo bloquear si el vehículo está en un estado previo a DOCUMENTADO
     if (!isUpsert && currentStatus !== VehicleStatus.DOCUMENTADO) {
@@ -138,34 +145,58 @@ export class CertificationsService {
         .doc(vehicleId)
         .set(certData, { merge: true });
 
-      // Actualizar campos del vehículo sin cambiar el estado
-      const vehicleUpdates: Record<string, unknown> = {
-        originConcessionaire: dto.originConcessionaire,
-        ...(vehiclePhotoUrl && { photoUrl: vehiclePhotoUrl }),
-      };
-      await this.db
-        .collection('vehicles')
-        .doc(vehicleId)
-        .update(vehicleUpdates);
+      if (needsStatusAdvance) {
+        // El vehículo aún está en DOCUMENTADO (o similar) con doc del seed —
+        // hay que avanzarlo a CERTIFICADO_STOCK igual que en el flujo normal
+        await this.vehiclesService.changeStatus(
+          vehicleId,
+          VehicleStatus.CERTIFICADO_STOCK,
+          user,
+          {
+            notes: `Certificado (re-patch) por ${user.displayName ?? user.email} — Km: ${dto.mileage}, Improntas: ${dto.imprints}`,
+            extraFields: {
+              certificationDate: now,
+              certifiedBy: user.uid,
+              originConcessionaire: dto.originConcessionaire,
+              receptionDate: now,
+              ...(vehiclePhotoUrl && { photoUrl: vehiclePhotoUrl }),
+            },
+          },
+        );
+      } else {
+        // El estado ya es post-certificación — solo actualizar campos del vehículo
+        const vehicleUpdates: Record<string, unknown> = {
+          originConcessionaire: dto.originConcessionaire,
+          ...(vehiclePhotoUrl && { photoUrl: vehiclePhotoUrl }),
+        };
+        await this.db
+          .collection('vehicles')
+          .doc(vehicleId)
+          .update(vehicleUpdates);
 
-      // Registrar en historial como corrección
-      await this.vehiclesService.addStatusHistory(
-        vehicleId,
-        currentStatus,
-        currentStatus,
-        user,
-        vehicle['sede'],
-        `Certificación actualizada (corrección/re-certificación) por ${user.displayName ?? user.email} — Km: ${dto.mileage}, Improntas: ${dto.imprints}`,
-      );
+        // Registrar en historial como corrección
+        await this.vehiclesService.addStatusHistory(
+          vehicleId,
+          currentStatus,
+          currentStatus,
+          user,
+          vehicle['sede'],
+          `Certificación actualizada (corrección/re-certificación) por ${user.displayName ?? user.email} — Km: ${dto.mileage}, Improntas: ${dto.imprints}`,
+        );
+      }
+
+      const finalStatus = needsStatusAdvance
+        ? VehicleStatus.CERTIFICADO_STOCK
+        : currentStatus;
 
       this.logger.log(
-        `Certificación actualizada (upsert) para vehículo ${vehicleId}`,
+        `Certificación actualizada (upsert) para vehículo ${vehicleId} — estado final: ${finalStatus}`,
       );
 
       return {
         vehicleId,
         upserted: true,
-        status: currentStatus,
+        newStatus: finalStatus,
         certificationDate: new Date().toISOString(),
       };
     }
