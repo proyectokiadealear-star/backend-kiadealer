@@ -20,6 +20,38 @@ export class AppointmentsService {
 
   private get db() { return this.firebase.firestore(); }
 
+  /**
+   * Shared helper: throws ConflictException if the advisor already has a
+   * non-CANCELADO appointment at the given date+time, excluding `excludeAptId`.
+   */
+  private async assertNoSlotConflict(
+    advisorId: string,
+    date: string,
+    time: string,
+    excludeAptId?: string,
+  ): Promise<void> {
+    const snap = await this.db
+      .collection('appointments')
+      .where('assignedAdvisorId', '==', advisorId)
+      .where('scheduledDate', '==', date)
+      .get();
+
+    const slotTaken = snap.docs.some((d) => {
+      const data = d.data();
+      return (
+        data['scheduledTime'] === time &&
+        data['status'] !== 'CANCELADO' &&
+        d.id !== excludeAptId
+      );
+    });
+
+    if (slotTaken) {
+      throw new ConflictException(
+        `El asesor ya tiene una entrega agendada el ${date} a las ${time}. Seleccione otro horario.`,
+      );
+    }
+  }
+
   async create(dto: CreateAppointmentDto, user: AuthenticatedUser) {
     const vehicle = await this.vehiclesService.assertExists(dto.vehicleId);
 
@@ -32,23 +64,7 @@ export class AppointmentsService {
     }
 
     // ── Verificar conflicto de horario para el asesor ──────────────────────
-    // Se consulta solo por assignedAdvisorId (índice simple automático) y se
-    // filtra scheduledDate + scheduledTime en memoria para evitar índices compuestos.
-    const advisorSnap = await this.db
-      .collection('appointments')
-      .where('assignedAdvisorId', '==', dto.assignedAdvisorId)
-      .where('scheduledDate', '==', dto.scheduledDate)
-      .get();
-
-    const slotTaken = advisorSnap.docs.some(
-      (d) => d.data()['scheduledTime'] === dto.scheduledTime && d.data()['status'] !== 'CANCELADO',
-    );
-
-    if (slotTaken) {
-      throw new ConflictException(
-        `El asesor ya tiene una entrega agendada el ${dto.scheduledDate} a las ${dto.scheduledTime}. Seleccione otro horario.`,
-      );
-    }
+    await this.assertNoSlotConflict(dto.assignedAdvisorId, dto.scheduledDate, dto.scheduledTime);
     // ──────────────────────────────────────────────────────────────────────
 
     const aptId = uuidv4();
@@ -122,10 +138,15 @@ export class AppointmentsService {
       .map((d) => d['scheduledTime'] as string);
   }
 
-  async findAll(user: AuthenticatedUser, dateFrom?: string, dateTo?: string) {
+  async findAll(user: AuthenticatedUser, dateFrom?: string, dateTo?: string, vehicleId?: string) {
     let query: FirebaseFirestore.Query = this.db.collection('appointments');
 
-    if (user.role === RoleEnum.JEFE_TALLER || user.role === RoleEnum.SOPORTE) {
+    // Si se filtra por vehicleId específico, omitir restricciones de rol/sede
+    // para que el asesor que ejecuta la ceremonia pueda encontrar la cita aunque
+    // no sea suya (ej: fue creada por otro asesor o desde el web).
+    if (vehicleId) {
+      query = query.where('vehicleId', '==', vehicleId);
+    } else if (user.role === RoleEnum.JEFE_TALLER || user.role === RoleEnum.SOPORTE) {
       // Ve todo — sin restricción de sede
     } else if (user.role === RoleEnum.LIDER_TECNICO || user.role === RoleEnum.PERSONAL_TALLER || user.role === RoleEnum.DOCUMENTACION) {
       // Ve todas las citas de su sede
@@ -174,6 +195,21 @@ export class AppointmentsService {
     if (!doc.exists) throw new NotFoundException('Agendamiento no encontrado');
 
     const apt = doc.data()!;
+
+    // ── Verificar conflicto de horario al reagendar ────────────────────────
+    // Only validate if date or time is actually changing.
+    const newDate = dto.scheduledDate ?? apt['scheduledDate'];
+    const newTime = dto.scheduledTime ?? apt['scheduledTime'];
+    const newAdvisorId = dto.assignedAdvisorId ?? apt['assignedAdvisorId'];
+
+    if (
+      dto.scheduledDate !== undefined ||
+      dto.scheduledTime !== undefined ||
+      dto.assignedAdvisorId !== undefined
+    ) {
+      await this.assertNoSlotConflict(newAdvisorId, newDate, newTime, aptId);
+    }
+    // ──────────────────────────────────────────────────────────────────────
 
     await this.db.collection('appointments').doc(aptId).update({
       ...Object.fromEntries(Object.entries(dto).filter(([, v]) => v !== undefined)),

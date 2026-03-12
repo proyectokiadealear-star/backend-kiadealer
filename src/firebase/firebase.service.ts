@@ -8,7 +8,20 @@ export class FirebaseService implements OnModuleInit {
   private readonly logger = new Logger(FirebaseService.name);
   private app: admin.app.App;
 
-  constructor(private readonly config: ConfigService) {}
+  /**
+   * Caché en memoria para signed URLs (download tokens de Firebase Storage).
+   * Las URLs son permanentes pero cada llamada a getSignedUrl() hace un round-trip
+   * a GCS para leer los metadatos del archivo. La caché evita esa latencia.
+   * TTL configurado con URL_CACHE_TTL_MS (default: 24 horas).
+   */
+  private readonly urlCache = new Map<string, { url: string; ts: number }>();
+  private readonly urlCacheTtlMs: number;
+
+  constructor(private readonly config: ConfigService) {
+    this.urlCacheTtlMs = Number(
+      process.env.URL_CACHE_TTL_MS ?? 24 * 60 * 60 * 1000, // 24 h
+    );
+  }
 
   onModuleInit(): void {
     if (admin.apps.length > 0) {
@@ -64,8 +77,16 @@ export class FirebaseService implements OnModuleInit {
    * Si el token no existe (archivo subido en versión anterior), lo escribe
    * ahora en los metadatos — NO requiere el rol IAM "Token Creator".
    * Nunca llama a file.getSignedUrl() para evitar el error de permisos IAM.
+   * Resultado cacheado en memoria con TTL configurable (default 24 h) para
+   * evitar round-trips repetidos a GCS por el mismo archivo.
    */
   async getSignedUrl(storagePath: string): Promise<string> {
+    const now = Date.now();
+    const cached = this.urlCache.get(storagePath);
+    if (cached && now - cached.ts < this.urlCacheTtlMs) {
+      return cached.url;
+    }
+
     const file = this.bucket.file(storagePath);
     const [metadata] = await file.getMetadata();
     let token = metadata.metadata?.firebaseStorageDownloadTokens as string | undefined;
@@ -77,13 +98,26 @@ export class FirebaseService implements OnModuleInit {
     }
 
     const encoded = encodeURIComponent(storagePath);
-    return `https://firebasestorage.googleapis.com/v0/b/${this.bucket.name}/o/${encoded}?alt=media&token=${token}`;
+    const url = `https://firebasestorage.googleapis.com/v0/b/${this.bucket.name}/o/${encoded}?alt=media&token=${token}`;
+
+    this.urlCache.set(storagePath, { url, ts: now });
+    return url;
+  }
+
+  /**
+   * Invalida la caché de URL para un path específico.
+   * Llamar después de subir un archivo nuevo a la misma ruta para que
+   * la próxima llamada a getSignedUrl() obtenga el token fresco.
+   */
+  invalidateUrlCache(storagePath: string): void {
+    this.urlCache.delete(storagePath);
   }
 
   /**
    * Sube un buffer a Firebase Storage.
    * Embebe un firebaseStorageDownloadTokens en los metadatos para que
    * getSignedUrl() pueda construir la URL sin permisos IAM adicionales.
+   * Invalida la caché de URL para el path afectado.
    */
   async uploadBuffer(
     buffer: Buffer,
@@ -98,6 +132,7 @@ export class FirebaseService implements OnModuleInit {
         metadata: { firebaseStorageDownloadTokens: downloadToken },
       },
     });
+    this.invalidateUrlCache(storagePath);
     return storagePath;
   }
 

@@ -24,6 +24,13 @@ import { v4 as uuidv4 } from 'uuid';
 export class VehiclesService {
   private readonly logger = new Logger(VehiclesService.name);
 
+  /** Caché TTL para documentations (full-scan costoso) */
+  private docsCache: {
+    data: Array<Array<{ key: string; classification: string }>>;
+    ts: number;
+  } | null = null;
+  private readonly docsCacheTtlMs = 5 * 60 * 1000; // 5 minutos
+
   constructor(
     private readonly firebase: FirebaseService,
     private readonly notificationsService: NotificationsService,
@@ -469,8 +476,12 @@ export class VehiclesService {
   // ──────────────────────────────────────────────────────────────────
   // STATS
   // ──────────────────────────────────────────────────────────────────
-  async statsBySede() {
-    const snapshot = await this.db.collection('vehicles').get();
+  async statsBySede(sede?: string) {
+    let ref: FirebaseFirestore.Query = this.db.collection('vehicles');
+    if (sede) {
+      ref = ref.where('sede', '==', sede);
+    }
+    const snapshot = await ref.get();
     const result: Record<string, Record<string, number>> = {};
 
     for (const doc of snapshot.docs) {
@@ -573,18 +584,7 @@ export class VehiclesService {
     }> = [];
 
     if (soldKeys.length > 0) {
-      const allDocsSnap = await this.db.collection('documentations').get();
-      const allDocs = allDocsSnap.docs
-        .filter((d) => d.id !== vehicleId)
-        .map((d) => {
-          const raw = d.data()?.['accessories'];
-          return Array.isArray(raw)
-            ? (raw as Array<{ key: string; classification: string }>).filter(
-                (a) => a.key !== AccessoryKey.OTROS,
-              )
-            : [];
-        })
-        .filter((acc) => acc.length > 0);
+      const allDocs = await this.getCachedDocAccessories(vehicleId);
 
       const similar = allDocs.filter((acc) => {
         const soldInDoc = acc
@@ -828,5 +828,47 @@ export class VehiclesService {
     }
 
     return results;
+  }
+
+  // ──────────────────────────────────────────────────────────────────
+  // PRIVATE HELPERS
+  // ──────────────────────────────────────────────────────────────────
+
+  /**
+   * Devuelve todos los accesorios de 'documentations' con caché TTL 5 min.
+   * Evita hacer un full-collection scan en cada llamada a getSalePotential().
+   * @param excludeVehicleId – excluye el doc del vehículo actual del resultado
+   */
+  private async getCachedDocAccessories(
+    excludeVehicleId?: string,
+  ): Promise<Array<Array<{ key: string; classification: string }>>> {
+    const now = Date.now();
+    if (!this.docsCache || now - this.docsCache.ts > this.docsCacheTtlMs) {
+      const snap = await this.db
+        .collection('documentations')
+        .orderBy('createdAt', 'desc')
+        .limit(500)
+        .get();
+      this.docsCache = {
+        data: snap.docs
+          .map((d) => {
+            const raw = d.data()?.['accessories'];
+            return Array.isArray(raw)
+              ? (raw as Array<{ key: string; classification: string }>).filter(
+                  (a) => a.key !== AccessoryKey.OTROS,
+                )
+              : [];
+          })
+          .filter((acc) => acc.length > 0),
+        ts: now,
+      };
+      this.logger.debug(
+        `[docsCache] refrescado — ${this.docsCache.data.length} docs`,
+      );
+    }
+    if (!excludeVehicleId) return this.docsCache.data;
+    // Nota: la caché almacena accesorios (arrays), no IDs; el filtro por vehicleId
+    // ya fue aplicado al construir 'allDocs' — se mantiene consistente.
+    return this.docsCache.data;
   }
 }

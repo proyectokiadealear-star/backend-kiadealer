@@ -13,6 +13,7 @@ import { CatalogsModule } from './modules/catalogs/catalogs.module';
 import { ReportsModule } from './modules/reports/reports.module';
 import { SeedModule } from './modules/seed/seed.module';
 import { AuthModule } from './modules/auth/auth.module';
+import { HomeModule } from './modules/home/home.module';
 
 @Module({
   imports: [
@@ -30,6 +31,7 @@ import { AuthModule } from './modules/auth/auth.module';
     ReportsModule,
     SeedModule,
     AuthModule,
+    HomeModule,
   ],
 })
 export class AppModule {}

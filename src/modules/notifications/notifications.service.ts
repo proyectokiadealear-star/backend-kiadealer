@@ -88,22 +88,42 @@ export class NotificationsService {
   }
 
   async getNotifications(uid: string, userRole: RoleEnum, userSede: string, onlyUnread: boolean, limit: number) {
-    let query: FirebaseFirestore.Query = this.db
-      .collection('notifications')
-      .where('targetRole', '==', userRole);
+    // Fetch only for the user's specific sede and for ALL — avoids a full collection scan.
+    // We run two Firestore queries (one per targetSede value) and merge, which is cheaper
+    // than fetching everything and filtering in memory.
+    // Required composite index: notifications — targetRole ASC, targetSede ASC, createdAt DESC
+    const safeLimit = limit ?? 50;
 
-    if (onlyUnread) {
-      query = query.where('read', '==', false);
+    const buildQuery = (targetSede: string): FirebaseFirestore.Query => {
+      let q: FirebaseFirestore.Query = this.db
+        .collection('notifications')
+        .where('targetRole', '==', userRole)
+        .where('targetSede', '==', targetSede);
+      if (onlyUnread) {
+        q = q.where('read', '==', false);
+      }
+      return q.orderBy('createdAt', 'desc').limit(safeLimit);
+    };
+
+    const [sedeSnap, allSnap] = await Promise.all([
+      buildQuery(userSede).get(),
+      buildQuery(SedeEnum.ALL).get(),
+    ]);
+
+    const seenIds = new Set<string>();
+    const results: FirebaseFirestore.DocumentData[] = [];
+    for (const snap of [sedeSnap, allSnap]) {
+      for (const doc of snap.docs) {
+        if (!seenIds.has(doc.id)) {
+          seenIds.add(doc.id);
+          results.push(doc.data());
+        }
+      }
     }
 
-    // Sin orderBy en Firestore para evitar índices compuestos — ordenar en memoria
-    const snapshot = await query.get();
-    return snapshot.docs
-      .map((d) => d.data())
-      // Filtrar por sede en memoria: ver las de su propia sede + las dirigidas a ALL
-      .filter((n) => n['targetSede'] === userSede || n['targetSede'] === SedeEnum.ALL)
+    return results
       .sort((a, b) => (b['createdAt']?._seconds ?? 0) - (a['createdAt']?._seconds ?? 0))
-      .slice(0, limit);
+      .slice(0, safeLimit);
   }
 
   async markAsRead(notifId: string) {

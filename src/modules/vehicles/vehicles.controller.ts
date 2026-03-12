@@ -74,8 +74,8 @@ export class VehiclesController {
   @ApiResponse({ status: 200, description: 'Mapa de sede → { status: count }' })
   @ApiResponse({ status: 403, description: 'Rol no autorizado' })
   @Roles(RoleEnum.JEFE_TALLER, RoleEnum.SOPORTE)
-  statsBySede() {
-    return this.svc.statsBySede();
+  statsBySede(@Query('sede') sede?: string) {
+    return this.svc.statsBySede(sede);
   }
 
   @Get('stats/today-deliveries')

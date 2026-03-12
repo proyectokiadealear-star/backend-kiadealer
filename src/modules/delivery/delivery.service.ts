@@ -24,7 +24,9 @@ export class DeliveryService {
     private readonly notificationsService: NotificationsService,
   ) {}
 
-  private get db() { return this.firebase.firestore(); }
+  private get db() {
+    return this.firebase.firestore();
+  }
 
   async createCeremony(
     vehicleId: string,
@@ -38,35 +40,75 @@ export class DeliveryService {
     const vehicle = await this.vehiclesService.assertExists(vehicleId);
 
     if (vehicle['status'] !== VehicleStatus.AGENDADO) {
-      throw new BadRequestException(`El vehículo debe estar AGENDADO. Estado: ${vehicle['status']}`);
+      throw new BadRequestException(
+        `El vehículo debe estar AGENDADO. Estado: ${vehicle['status']}`,
+      );
     }
 
     // Verificar que el asesor es el asignado al agendamiento
-    const aptSnap = await this.db.collection('appointments').doc(dto.appointmentId).get();
-    if (!aptSnap.exists) throw new NotFoundException('Agendamiento no encontrado');
+    const aptSnap = await this.db
+      .collection('appointments')
+      .doc(dto.appointmentId)
+      .get();
+    if (!aptSnap.exists)
+      throw new NotFoundException('Agendamiento no encontrado');
 
     const apt = aptSnap.data()!;
-    if (apt['assignedAdvisorId'] !== user.uid && user.role !== RoleEnum.JEFE_TALLER && user.role !== RoleEnum.SOPORTE) {
-      throw new ForbiddenException('Solo el asesor asignado puede ejecutar la ceremonia de entrega');
+    if (
+      apt['assignedAdvisorId'] !== user.uid &&
+      user.role !== RoleEnum.JEFE_TALLER &&
+      user.role !== RoleEnum.SOPORTE
+    ) {
+      throw new ForbiddenException(
+        'Solo el asesor asignado puede ejecutar la ceremonia de entrega',
+      );
     }
 
-    // Validar que la entrega ocurre el día agendado
-    const todayStr = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
-    if (apt['scheduledDate'] && apt['scheduledDate'] !== todayStr) {
-      throw new BadRequestException(
-        `La ceremonia solo puede ejecutarse el día agendado (${apt['scheduledDate']}). Hoy es ${todayStr}.`,
-      );
+    // Validar fecha — usar timezone configurable (default UTC-5 Ecuador) para evitar desfase
+    // JEFE_TALLER y SOPORTE tienen override completo de fecha
+    if (user.role !== RoleEnum.JEFE_TALLER && user.role !== RoleEnum.SOPORTE) {
+      const tzOffsetHours = Number(process.env.TZ_OFFSET_HOURS ?? -5);
+      const nowLocal = new Date(Date.now() + tzOffsetHours * 60 * 60 * 1000);
+      const todayStr = nowLocal.toISOString().slice(0, 10); // YYYY-MM-DD en timezone local
+      const yesterdayStr = new Date(nowLocal.getTime() - 24 * 60 * 60 * 1000)
+        .toISOString()
+        .slice(0, 10);
+
+      if (apt['scheduledDate'] && apt['scheduledDate'] < yesterdayStr) {
+        throw new BadRequestException(
+          `La ceremonia solo puede ejecutarse el día agendado o al día siguiente (${apt['scheduledDate']}). Hoy es ${todayStr}.`,
+        );
+      }
+      if (apt['scheduledDate'] && apt['scheduledDate'] > todayStr) {
+        throw new BadRequestException(
+          `La ceremonia no puede ejecutarse antes del día agendado (${apt['scheduledDate']}). Hoy es ${todayStr}.`,
+        );
+      }
     }
 
     const basePath = `vehicles/${vehicleId}/delivery`;
     const [deliveryPhotoUrl, signedActaUrl] = await Promise.all([
       files?.deliveryPhoto
-        ? this.firebase.uploadBuffer(files.deliveryPhoto.buffer, `${basePath}/ceremony-photo.jpg`, files.deliveryPhoto.mimetype)
-            .then(() => this.firebase.getSignedUrl(`${basePath}/ceremony-photo.jpg`))
+        ? this.firebase
+            .uploadBuffer(
+              files.deliveryPhoto.buffer,
+              `${basePath}/ceremony-photo.jpg`,
+              files.deliveryPhoto.mimetype,
+            )
+            .then(() =>
+              this.firebase.getSignedUrl(`${basePath}/ceremony-photo.jpg`),
+            )
         : Promise.resolve(null),
       files?.signedActa
-        ? this.firebase.uploadBuffer(files.signedActa.buffer, `${basePath}/signed-acta.jpg`, files.signedActa.mimetype)
-            .then(() => this.firebase.getSignedUrl(`${basePath}/signed-acta.jpg`))
+        ? this.firebase
+            .uploadBuffer(
+              files.signedActa.buffer,
+              `${basePath}/signed-acta.jpg`,
+              files.signedActa.mimetype,
+            )
+            .then(() =>
+              this.firebase.getSignedUrl(`${basePath}/signed-acta.jpg`),
+            )
         : Promise.resolve(null),
     ]);
 
@@ -83,16 +125,24 @@ export class DeliveryService {
       createdAt: now,
     };
 
-    await this.db.collection('deliveryCeremonies').doc(vehicleId).set(ceremonyData);
+    await this.db
+      .collection('deliveryCeremonies')
+      .doc(vehicleId)
+      .set(ceremonyData);
 
-    await this.vehiclesService.changeStatus(vehicleId, VehicleStatus.ENTREGADO, user, {
-      notes: `Entregado por ${user.displayName ?? user.email} — agendamiento ${dto.appointmentId}`,
-      extraFields: {
-        deliveryDate: now,
-        deliveredBy: user.uid,
-        deliveredByName: user.displayName ?? user.email,
+    await this.vehiclesService.changeStatus(
+      vehicleId,
+      VehicleStatus.ENTREGADO,
+      user,
+      {
+        notes: `Entregado por ${user.displayName ?? user.email} — agendamiento ${dto.appointmentId}`,
+        extraFields: {
+          deliveryDate: now,
+          deliveredBy: user.uid,
+          deliveredByName: user.displayName ?? user.email,
+        },
       },
-    });
+    );
 
     // Marcar el agendamiento como completado
     await this.db.collection('appointments').doc(dto.appointmentId).update({
@@ -110,13 +160,22 @@ export class DeliveryService {
       chassis: vehicle['chassis'] as string,
     });
 
-    this.logger.log(`Ceremonia de entrega completada para vehículo ${vehicleId}`);
+    this.logger.log(
+      `Ceremonia de entrega completada para vehículo ${vehicleId}`,
+    );
 
-    return { vehicleId, newStatus: VehicleStatus.ENTREGADO, deliveryDate: new Date().toISOString() };
+    return {
+      vehicleId,
+      newStatus: VehicleStatus.ENTREGADO,
+      deliveryDate: new Date().toISOString(),
+    };
   }
 
   async getCeremony(vehicleId: string) {
-    const doc = await this.db.collection('deliveryCeremonies').doc(vehicleId).get();
+    const doc = await this.db
+      .collection('deliveryCeremonies')
+      .doc(vehicleId)
+      .get();
     if (!doc.exists) return null;
 
     const data = doc.data() as Record<string, any>;

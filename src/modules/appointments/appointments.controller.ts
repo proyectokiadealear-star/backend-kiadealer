@@ -81,14 +81,16 @@ export class AppointmentsController {
   })
   @ApiQuery({ name: 'dateFrom', required: false, description: 'Fecha inicio filtro (YYYY-MM-DD)', example: '2026-03-01' })
   @ApiQuery({ name: 'dateTo', required: false, description: 'Fecha fin filtro (YYYY-MM-DD)', example: '2026-03-31' })
+  @ApiQuery({ name: 'vehicleId', required: false, description: 'Filtrar por ID de vehículo específico (ej: pantalla de ceremonia)', example: 'abc-123' })
   @ApiResponse({ status: 200, description: 'Lista de agendamientos ordenada por fecha ascendente' })
   @Roles(RoleEnum.ASESOR, RoleEnum.DOCUMENTACION ,RoleEnum.LIDER_TECNICO, RoleEnum.JEFE_TALLER, RoleEnum.SOPORTE)
   findAll(
     @CurrentUser() user: AuthenticatedUser,
     @Query('dateFrom') dateFrom?: string,
     @Query('dateTo') dateTo?: string,
+    @Query('vehicleId') vehicleId?: string,
   ) {
-    return this.svc.findAll(user, dateFrom, dateTo);
+    return this.svc.findAll(user, dateFrom, dateTo, vehicleId);
   }
 
   // ── REAGENDAR / ACTUALIZAR ────────────────────────────────

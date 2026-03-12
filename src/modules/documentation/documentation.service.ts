@@ -110,6 +110,15 @@ export class DocumentationService {
     const accessoriesList = Array.isArray(dto.accessories)
       ? dto.accessories
       : [];
+
+    // Punto 1 (guard defensivo): al no ser pendiente, los accesorios deben llegar como array.
+    // El @Transform del DTO ya debería haber rechazado JSON inválido, pero si llegara
+    // un valor no-array aquí, preferimos error explícito a guardar accessories:[].
+    if (!isPending && !Array.isArray(dto.accessories)) {
+      throw new BadRequestException(
+        'El campo "accessories" es obligatorio y debe ser un array JSON válido para completar la documentación.',
+      );
+    }
     const allAccessoriesNoAplica =
       !isPending &&
       accessoriesList.length > 0 &&
@@ -347,49 +356,75 @@ export class DocumentationService {
     const data = doc.data()!;
     const basePath = `vehicles/${vehicleId}/docs`;
 
-    // Regenerar URL firmada fresca para factura de vehículo
-    if (data['vehicleInvoiceUrl']) {
-      data['vehicleInvoiceUrl'] = await this.firebase
-        .getSignedUrl(`${basePath}/vehicle-invoice.pdf`)
-        .catch(() => data['vehicleInvoiceUrl']);
-    }
-
-    // Regenerar URLs firmadas para gift emails (array)
+    // Regenerar todas las signed URLs en paralelo (antes: en serie con await)
     const giftEmailUrls: string[] = data['giftEmailUrls'] ?? [];
-    if (giftEmailUrls.length > 0) {
-      const fresh: string[] = [];
-      for (let i = 0; i < giftEmailUrls.length; i++) {
-        const url = await this.firebase
-          .getSignedUrl(`${basePath}/gift-email-${i}.pdf`)
-          .catch(() => giftEmailUrls[i]);
-        fresh.push(url);
-      }
-      data['giftEmailUrls'] = fresh;
-      data['giftEmailUrl'] = fresh[0] ?? null;
-    } else if (data['giftEmailUrl']) {
-      // Legacy: documento singular
-      data['giftEmailUrl'] = await this.firebase
-        .getSignedUrl(`${basePath}/gift-email.pdf`)
-        .catch(() => data['giftEmailUrl']);
+    const accessoryInvoiceUrls: string[] = data['accessoryInvoiceUrls'] ?? [];
+
+    const [
+      freshVehicleInvoice,
+      freshGiftEmails,
+      freshGiftEmailLegacy,
+      freshAccessoryInvoices,
+      freshAccessoryInvoiceLegacy,
+    ] = await Promise.all([
+      // factura del vehículo
+      data['vehicleInvoiceUrl']
+        ? this.firebase
+            .getSignedUrl(`${basePath}/vehicle-invoice.pdf`)
+            .catch(() => data['vehicleInvoiceUrl'] as string)
+        : Promise.resolve(null as string | null),
+
+      // gift emails (array)
+      giftEmailUrls.length > 0
+        ? Promise.all(
+            giftEmailUrls.map((fallback, i) =>
+              this.firebase
+                .getSignedUrl(`${basePath}/gift-email-${i}.pdf`)
+                .catch(() => fallback),
+            ),
+          )
+        : Promise.resolve([] as string[]),
+
+      // gift email legacy (singular)
+      giftEmailUrls.length === 0 && data['giftEmailUrl']
+        ? this.firebase
+            .getSignedUrl(`${basePath}/gift-email.pdf`)
+            .catch(() => data['giftEmailUrl'] as string)
+        : Promise.resolve(null as string | null),
+
+      // accessory invoices (array)
+      accessoryInvoiceUrls.length > 0
+        ? Promise.all(
+            accessoryInvoiceUrls.map((fallback, i) =>
+              this.firebase
+                .getSignedUrl(`${basePath}/accessory-invoice-${i}.pdf`)
+                .catch(() => fallback),
+            ),
+          )
+        : Promise.resolve([] as string[]),
+
+      // accessory invoice legacy (singular)
+      accessoryInvoiceUrls.length === 0 && data['accessoryInvoiceUrl']
+        ? this.firebase
+            .getSignedUrl(`${basePath}/accessory-invoice.pdf`)
+            .catch(() => data['accessoryInvoiceUrl'] as string)
+        : Promise.resolve(null as string | null),
+    ]);
+
+    if (freshVehicleInvoice !== null) data['vehicleInvoiceUrl'] = freshVehicleInvoice;
+
+    if (freshGiftEmails.length > 0) {
+      data['giftEmailUrls'] = freshGiftEmails;
+      data['giftEmailUrl'] = freshGiftEmails[0] ?? null;
+    } else if (freshGiftEmailLegacy !== null) {
+      data['giftEmailUrl'] = freshGiftEmailLegacy;
     }
 
-    // Regenerar URLs firmadas para facturas de accesorios (array)
-    const accessoryInvoiceUrls: string[] = data['accessoryInvoiceUrls'] ?? [];
-    if (accessoryInvoiceUrls.length > 0) {
-      const fresh: string[] = [];
-      for (let i = 0; i < accessoryInvoiceUrls.length; i++) {
-        const url = await this.firebase
-          .getSignedUrl(`${basePath}/accessory-invoice-${i}.pdf`)
-          .catch(() => accessoryInvoiceUrls[i]);
-        fresh.push(url);
-      }
-      data['accessoryInvoiceUrls'] = fresh;
-      data['accessoryInvoiceUrl'] = fresh[0] ?? null;
-    } else if (data['accessoryInvoiceUrl']) {
-      // Legacy: documento singular
-      data['accessoryInvoiceUrl'] = await this.firebase
-        .getSignedUrl(`${basePath}/accessory-invoice.pdf`)
-        .catch(() => data['accessoryInvoiceUrl']);
+    if (freshAccessoryInvoices.length > 0) {
+      data['accessoryInvoiceUrls'] = freshAccessoryInvoices;
+      data['accessoryInvoiceUrl'] = freshAccessoryInvoices[0] ?? null;
+    } else if (freshAccessoryInvoiceLegacy !== null) {
+      data['accessoryInvoiceUrl'] = freshAccessoryInvoiceLegacy;
     }
 
     return data;
@@ -422,6 +457,15 @@ export class DocumentationService {
       // Flujo normal: requiere saveAsPending=false explícito
       // Flujo reapertura: auto-completa a menos que explícitamente saveAsPending=true
       (saveAsPending === false || (isReopening && saveAsPending !== true));
+
+    // Punto 1: al completar una documentación pendiente, los accesorios son obligatorios.
+    // Sin esta validación, un PATCH sin `accessories` deja el campo vacío en Firestore
+    // y la OT se crea sin accesorios, sin ningún error visible.
+    if (isCompleting && !isReopening && !Array.isArray(accessories)) {
+      throw new BadRequestException(
+        'El campo "accessories" es obligatorio al completar una documentación pendiente (saveAsPending=false).',
+      );
+    }
 
     const now = this.firebase.serverTimestamp();
     const updates: Record<string, unknown> = {

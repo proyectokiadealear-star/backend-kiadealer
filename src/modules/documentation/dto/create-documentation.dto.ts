@@ -109,10 +109,16 @@ export class CreateDocumentationDto {
       'En multipart/form-data enviar como JSON serializado: `JSON.stringify([...])`.',
   })
   @Transform(({ value }) => {
-    const parsed =
-      typeof value === 'string'
-        ? (() => { try { return JSON.parse(value); } catch { return value; } })()
-        : value;
+    let parsed: unknown = value;
+    if (typeof value === 'string') {
+      try {
+        parsed = JSON.parse(value);
+      } catch {
+        // JSON inválido → retornar null para que @IsArray() falle con mensaje claro
+        // en vez de dejar pasar el string crudo (que acabaría guardando accessories:[])
+        return null;
+      }
+    }
     return Array.isArray(parsed)
       ? parsed.map((item: unknown) => plainToInstance(AccessoryItemDto, item))
       : parsed;

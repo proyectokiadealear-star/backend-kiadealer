@@ -106,9 +106,6 @@ export class ReportsService {
     user: AuthenticatedUser,
     filters?: { sede?: string; dateFrom?: string; dateTo?: string },
   ) {
-    const snapshot = await this.db.collection('vehicles').get();
-    const all = snapshot.docs.map((d) => d.data());
-
     // Soporta DD/MM/YYYY y YYYY-MM-DD
     const parseDate = (raw?: string): Date | null => {
       if (!raw) return null;
@@ -124,10 +121,35 @@ export class ReportsService {
       ? new Date(`${parseDate(filters.dateTo)!.toISOString().slice(0, 10)}T23:59:59.999Z`)
       : null;
 
+    // ── Construir query Firestore con filtros en servidor ────────────────
+    let query: FirebaseFirestore.Query = this.db.collection('vehicles');
+
+    // Filtro por sede: si no es JEFE_TALLER, forzar la sede del usuario;
+    // si lo es pero se pasa filtro de sede, aplicarlo también.
+    const sedeFilter = user.role !== RoleEnum.JEFE_TALLER
+      ? user.sede
+      : (filters?.sede ?? null);
+    if (sedeFilter) {
+      query = query.where('sede', '==', sedeFilter);
+    }
+
+    // Filtro por rango de fechas en Firestore cuando se usan los dos extremos
+    if (fromDate && toDate) {
+      query = query
+        .where('receptionDate', '>=', fromDate)
+        .where('receptionDate', '<=', toDate);
+    } else if (fromDate) {
+      query = query.where('receptionDate', '>=', fromDate);
+    } else if (toDate) {
+      query = query.where('receptionDate', '<=', toDate);
+    }
+
+    const snapshot = await query.get();
+    const all = snapshot.docs.map((d) => d.data());
+
+    // Filtro en memoria como salvaguarda (por si receptionDate es Timestamp vs string)
     const filtered = all.filter((v) => {
-      if (user.role !== RoleEnum.JEFE_TALLER && v['sede'] !== user.sede) return false;
-      if (filters?.sede && v['sede'] !== filters.sede) return false;
-      // Filtro por receptionDate
+      if (filters?.sede && user.role === RoleEnum.JEFE_TALLER && v['sede'] !== filters.sede) return false;
       if (fromDate || toDate) {
         const rd = v['receptionDate'];
         if (!rd) return false;
@@ -246,7 +268,7 @@ export class ReportsService {
 
   async getTechnicianPerformance(uid: string) {
     const ordersSnap = await this.db
-      .collection('serviceOrders')
+      .collection('service-orders')
       .where('assignedTechnicianId', '==', uid)
       .get();
 

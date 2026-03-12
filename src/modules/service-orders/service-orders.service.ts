@@ -28,6 +28,13 @@ import { SedeEnum } from '../../common/enums/sede.enum';
 export class ServiceOrdersService {
   private readonly logger = new Logger(ServiceOrdersService.name);
 
+  /** Caché TTL para documentations (full-scan costoso) */
+  private docsCache: {
+    data: Array<Array<{ key: string; classification: string }>>;
+    ts: number;
+  } | null = null;
+  private readonly docsCacheTtlMs = 5 * 60 * 1000; // 5 minutos
+
   constructor(
     private readonly firebase: FirebaseService,
     private readonly vehiclesService: VehiclesService,
@@ -181,7 +188,13 @@ export class ServiceOrdersService {
       query = query.where('sede', '==', filters.sede);
     }
 
-    // Sin where adicionales para evitar índices compuestos — filtrar en memoria
+    // Filtrar vehicleId en Firestore cuando sea el único filtro extra
+    // (evita traer toda la colección para consultas por vehículo)
+    if (filters?.vehicleId) {
+      query = query.where('vehicleId', '==', filters.vehicleId);
+    }
+
+    // Sin where adicionales para status para evitar índices compuestos — filtrar en memoria
     const snapshot = await query.get();
     let results = snapshot.docs
       .map((d) => d.data())
@@ -200,9 +213,6 @@ export class ServiceOrdersService {
       results = results.filter((d) =>
         statusList.includes(d['status'] as string),
       );
-    }
-    if (filters?.vehicleId) {
-      results = results.filter((d) => d['vehicleId'] === filters.vehicleId);
     }
 
     return results;
@@ -616,17 +626,8 @@ export class ServiceOrdersService {
 
     if (soldKeys.length === 0) return [];
 
-    // Obtener todos los vehículos con documentación
-    const allDocsSnap = await this.db.collection('documentations').get();
-    const allDocs = allDocsSnap.docs
-      .filter((d) => d.id !== vehicleId)
-      .map((d) => {
-        const raw = d.data()?.['accessories'];
-        return Array.isArray(raw)
-          ? (raw as Array<{ key: string; classification: string }>)
-          : [];
-      })
-      .filter((acc) => acc.length > 0); // descartar docs sin accesorios válidos
+    // Obtener todos los vehículos con documentación (con caché TTL 5 min)
+    const allDocs = await this.getCachedDocAccessories();
 
     // Encontrar vehículos con al menos las mismas keys vendidas
     const similar = allDocs.filter((acc) => {
@@ -675,5 +676,41 @@ export class ServiceOrdersService {
     }
 
     return predictions.sort((a, b) => b.probability - a.probability);
+  }
+
+  // ──────────────────────────────────────────────────────────────────
+  // PRIVATE HELPERS
+  // ──────────────────────────────────────────────────────────────────
+
+  /**
+   * Devuelve los accesorios de 'documentations' con caché TTL 5 min.
+   * Limita a los 500 docs más recientes para evitar full-collection scans.
+   */
+  private async getCachedDocAccessories(): Promise<
+    Array<Array<{ key: string; classification: string }>>
+  > {
+    const now = Date.now();
+    if (!this.docsCache || now - this.docsCache.ts > this.docsCacheTtlMs) {
+      const snap = await this.db
+        .collection('documentations')
+        .orderBy('createdAt', 'desc')
+        .limit(500)
+        .get();
+      this.docsCache = {
+        data: snap.docs
+          .map((d) => {
+            const raw = d.data()?.['accessories'];
+            return Array.isArray(raw)
+              ? (raw as Array<{ key: string; classification: string }>)
+              : [];
+          })
+          .filter((acc) => acc.length > 0),
+        ts: now,
+      };
+      this.logger.debug(
+        `[docsCache] refrescado — ${this.docsCache.data.length} docs`,
+      );
+    }
+    return this.docsCache.data;
   }
 }
