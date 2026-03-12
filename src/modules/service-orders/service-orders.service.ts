@@ -683,9 +683,74 @@ export class ServiceOrdersService {
   // ──────────────────────────────────────────────────────────────────
 
   /**
-   * Devuelve los accesorios de 'documentations' con caché TTL 5 min.
-   * Limita a los 500 docs más recientes para evitar full-collection scans.
+   * Finaliza manualmente la instalación de una OT (para OTs sin accesorios o generadas por seed).
+   * Solo el técnico asignado, JEFE_TALLER o SOPORTE pueden finalizar.
    */
+  async completeInstallation(orderId: string, user: AuthenticatedUser) {
+    // Solo el técnico asignado (o roles de override) pueden finalizar
+    const isOverrideRole =
+      user.role === RoleEnum.JEFE_TALLER || user.role === RoleEnum.SOPORTE;
+    const order = await this.findOne(orderId);
+    if (order!['assignedTechnicianId'] !== user.uid && !isOverrideRole) {
+      throw new ForbiddenException(
+        'Solo el técnico asignado puede finalizar la instalación',
+      );
+    }
+    const allowedStatuses = ['ASIGNADA', 'EN_INSTALACION'];
+    if (!allowedStatuses.includes(order!['status'])) {
+      throw new BadRequestException(
+        `La OT debe estar en estado ASIGNADA o EN_INSTALACION para finalizarla. Estado actual: ${order!['status']}`,
+      );
+    }
+    const now = this.firebase.serverTimestamp();
+    // Marcar todos los ítems del checklist como instalados (si los hay)
+    const checklist: Array<{ key: string; installed: boolean }> =
+      (order!['checklist'] ?? []).map((c: any) => ({ ...c, installed: true }));
+    await this.db.collection('service-orders').doc(orderId).update({
+      checklist,
+      status: 'INSTALACION_COMPLETA',
+      updatedAt: now,
+    });
+    const vehicleId = order!['vehicleId'];
+    const vehicle = await this.vehiclesService.assertExists(vehicleId);
+    await this.vehiclesService.changeStatus(
+      vehicleId,
+      VehicleStatus.INSTALACION_COMPLETA,
+      user,
+      {
+        notes: `Instalación finalizada manualmente por ${user.displayName ?? user.email}${checklist.length === 0 ? ' (OT sin accesorios)' : ''}`,
+        extraFields: {
+          installationCompleteDate: now,
+          installedBy: user.uid,
+        },
+      },
+    );
+    await Promise.all([
+      this.notificationsService.notify({
+        type: 'INSTALACION_LISTA',
+        targetRole: RoleEnum.LIDER_TECNICO,
+        targetSede: order!['sede'],
+        title: '✅ Instalación completada',
+        body: `El vehículo ${vehicle['chassis']} completó la instalación`,
+        vehicleId,
+        chassis: vehicle['chassis'] as string,
+      }),
+      this.notificationsService.notify({
+        type: 'INSTALACION_LISTA',
+        targetRole: RoleEnum.JEFE_TALLER,
+        targetSede: 'ALL',
+        title: '✅ Instalación completada',
+        body: `El vehículo ${vehicle['chassis']} completó la instalación`,
+        vehicleId,
+        chassis: vehicle['chassis'] as string,
+      }),
+    ]);
+    this.logger.log(
+      `Instalación finalizada manualmente en OT ${orderId} por ${user.uid}`,
+    );
+    return await this.findOne(orderId);
+  }
+
   private async getCachedDocAccessories(): Promise<
     Array<Array<{ key: string; classification: string }>>
   > {

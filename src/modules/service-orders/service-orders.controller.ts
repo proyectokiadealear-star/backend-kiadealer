@@ -281,6 +281,38 @@ export class ServiceOrdersController {
     return this.svc.updateChecklist(id, dto, user);
   }
 
+  // ── FINALIZAR INSTALACIÓN MANUAL (OT sin accesorios / seed) ──
+  @Patch(':id/complete-installation')
+  @ApiOperation({
+    summary: 'Finalizar instalación manualmente',
+    description:
+      'Permite al técnico asignado marcar la OT como INSTALACION_COMPLETA sin requerir ' +
+      'ítems en el checklist. Útil para OTs generadas desde seed sin accesorios. ' +
+      'Prerrequisito: estado ASIGNADA o EN_INSTALACION. ' +
+      '**Roles:** PERSONAL_TALLER, JEFE_TALLER, SOPORTE',
+  })
+  @ApiParam({ name: 'id', description: 'ID de la orden de trabajo (UUID)' })
+  @ApiResponse({
+    status: 200,
+    description: 'OT marcada como INSTALACION_COMPLETA',
+  })
+  @ApiResponse({
+    status: 400,
+    description: 'La OT no está en estado ASIGNADA o EN_INSTALACION',
+  })
+  @ApiResponse({
+    status: 403,
+    description: 'No eres el técnico asignado a esta OT',
+  })
+  @ApiResponse({ status: 404, description: 'Orden de trabajo no encontrada' })
+  @Roles(RoleEnum.PERSONAL_TALLER, RoleEnum.JEFE_TALLER, RoleEnum.SOPORTE)
+  completeInstallation(
+    @Param('id') id: string,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.svc.completeInstallation(id, user);
+  }
+
   // ── LISTO PARA ENTREGA ───────────────────────────────
   @Patch(':id/ready-for-delivery')
   @ApiOperation({

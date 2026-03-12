@@ -88,42 +88,64 @@ export class NotificationsService {
   }
 
   async getNotifications(uid: string, userRole: RoleEnum, userSede: string, onlyUnread: boolean, limit: number) {
-    // Fetch only for the user's specific sede and for ALL — avoids a full collection scan.
-    // We run two Firestore queries (one per targetSede value) and merge, which is cheaper
-    // than fetching everything and filtering in memory.
-    // Required composite index: notifications — targetRole ASC, targetSede ASC, createdAt DESC
     const safeLimit = limit ?? 50;
+    const cutoff = new Date(Date.now() - 24 * 60 * 60 * 1000);
 
-    const buildQuery = (targetSede: string): FirebaseFirestore.Query => {
-      let q: FirebaseFirestore.Query = this.db
-        .collection('notifications')
-        .where('targetRole', '==', userRole)
-        .where('targetSede', '==', targetSede);
-      if (onlyUnread) {
-        q = q.where('read', '==', false);
-      }
-      return q.orderBy('createdAt', 'desc').limit(safeLimit);
-    };
+    // Single-field equality query — uses the automatic single-field index Firestore
+    // creates for every field by default. No composite index required.
+    const snapshot = await this.db
+      .collection('notifications')
+      .where('targetRole', '==', userRole)
+      .get();
 
-    const [sedeSnap, allSnap] = await Promise.all([
-      buildQuery(userSede).get(),
-      buildQuery(SedeEnum.ALL).get(),
-    ]);
-
-    const seenIds = new Set<string>();
+    const toDelete: string[] = [];
     const results: FirebaseFirestore.DocumentData[] = [];
-    for (const snap of [sedeSnap, allSnap]) {
-      for (const doc of snap.docs) {
-        if (!seenIds.has(doc.id)) {
-          seenIds.add(doc.id);
-          results.push(doc.data());
-        }
+
+    for (const doc of snapshot.docs) {
+      const data = doc.data();
+      const createdDate: Date = data['createdAt']?.toDate?.() ?? new Date(0);
+
+      // Collect expired (>24h) docs for background cleanup
+      if (createdDate < cutoff) {
+        toDelete.push(doc.id);
+        continue;
       }
+
+      // Filter by sede: accept notifications for this sede or broadcast (ALL)
+      if (data['targetSede'] !== userSede && data['targetSede'] !== SedeEnum.ALL) {
+        continue;
+      }
+
+      // Filter by read status in-memory
+      if (onlyUnread && data['read'] !== false) {
+        continue;
+      }
+
+      results.push({ ...data, createdAt: createdDate.toISOString() });
+    }
+
+    // Fire-and-forget: delete expired notifications in batches of 500
+    if (toDelete.length > 0) {
+      this.deleteExpiredBatch(toDelete).catch((e) =>
+        this.logger.warn(`Error limpiando notificaciones expiradas: ${String(e)}`),
+      );
     }
 
     return results
-      .sort((a, b) => (b['createdAt']?._seconds ?? 0) - (a['createdAt']?._seconds ?? 0))
+      .sort((a, b) => new Date(b['createdAt']).getTime() - new Date(a['createdAt']).getTime())
       .slice(0, safeLimit);
+  }
+
+  private async deleteExpiredBatch(ids: string[]): Promise<void> {
+    const BATCH_SIZE = 500;
+    for (let i = 0; i < ids.length; i += BATCH_SIZE) {
+      const batch = this.db.batch();
+      ids.slice(i, i + BATCH_SIZE).forEach((id) =>
+        batch.delete(this.db.collection('notifications').doc(id)),
+      );
+      await batch.commit();
+    }
+    this.logger.log(`Limpieza automática: ${ids.length} notificaciones expiradas eliminadas`);
   }
 
   async markAsRead(notifId: string) {
