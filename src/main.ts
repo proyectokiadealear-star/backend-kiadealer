@@ -10,8 +10,9 @@ async function bootstrap() {
   // ── CORS ──────────────────────────────────────────────────────
   app.enableCors({
     origin: process.env.CORS_ORIGIN ?? '*',
-    methods: ['GET', 'POST', 'PATCH', 'DELETE', 'PUT'],
-    allowedHeaders: ['Content-Type', 'Authorization'],
+    methods: ['GET', 'POST', 'PATCH', 'DELETE', 'PUT', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'Accept'],
+    credentials: true,
   });
 
   // ── GLOBAL VALIDATION PIPE ────────────────────────────────────
