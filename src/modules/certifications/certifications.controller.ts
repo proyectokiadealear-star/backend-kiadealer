@@ -41,10 +41,12 @@ export class CertificationsController {
   @ApiOperation({
     summary: 'Registrar o actualizar certificación del vehículo (upsert)',
     description:
-      'Si el vehículo está en DOCUMENTADO y sin certificación previa: crea la certificación y avanza el estado a CERTIFICADO_STOCK (flujo normal). ' +
-      'Si el vehículo ya tiene certificación o ya está en CERTIFICADO_STOCK / EN_PREPARACION / LISTO_PARA_ENTREGA / ENTREGADO (ej: datos del seed): ' +
-      'actualiza los campos de certificación sin cambiar el estado ni re-disparar notificaciones (modo upsert/re-patch). ' +
-      'Sube la foto del vehículo y la foto de aros a Firebase Storage cuando se adjuntan. **Roles:** ASESOR, LIDER_TECNICO, PERSONAL_TALLER, JEFE_TALLER, SOPORTE',
+      'Comportamiento según el estado del vehículo: ' +
+      '(A) DOCUMENTADO sin cert previa → crea certificación y avanza a CERTIFICADO_STOCK (flujo normal). ' +
+      '(B) NO_FACTURADO → certifica físicamente, estado NO cambia, flag certifiedWhileNoFacturado=true. ' +
+      '(C) POR_ARRIBAR o ENVIADO_A_MATRICULAR → certifica físicamente, estado NO cambia, flag certifiedWhileEarlyState=true; cuando el vehículo avance a DOCUMENTADO, se podrá generar OT directamente. ' +
+      '(Upsert) vehículo ya certificado o en estado post-certificación → actualiza campos sin cambiar estado. ' +
+      'Sube foto del vehículo y foto de aros a Firebase Storage cuando se adjuntan. **Roles:** ASESOR, LIDER_TECNICO, PERSONAL_TALLER, JEFE_TALLER, SOPORTE',
   })
   @ApiParam({
     name: 'vehicleId',
@@ -65,7 +67,7 @@ export class CertificationsController {
   @ApiResponse({
     status: 400,
     description:
-      'Vehículo está en un estado previo a DOCUMENTADO (ej: POR_ARRIBAR)',
+      'Vehículo está en un estado no permitido para certificar (ej: ORDEN_GENERADA, ASIGNADO, etc.)',
   })
   @ApiResponse({ status: 401, description: 'Token inválido o ausente' })
   @ApiResponse({ status: 403, description: 'Rol no autorizado' })

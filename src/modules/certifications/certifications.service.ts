@@ -72,18 +72,26 @@ export class CertificationsService {
     // ¿Necesita avanzar el estado? Solo si el doc existe pero el estado aún no avanzó
     const needsStatusAdvance = isUpsert && !alreadyInPostCertStatus;
 
-    // Solo bloquear si el vehículo está en un estado previo a DOCUMENTADO/NO_FACTURADO
+    // Solo bloquear si el vehículo está en un estado no permitido para certificar
     const allowedStatuses = [
       VehicleStatus.DOCUMENTADO,
       VehicleStatus.NO_FACTURADO,
+      VehicleStatus.POR_ARRIBAR,
+      VehicleStatus.ENVIADO_A_MATRICULAR,
     ];
     if (!isUpsert && !allowedStatuses.includes(currentStatus)) {
       throw new BadRequestException(
-        `El vehículo debe estar en estado DOCUMENTADO o NO_FACTURADO para certificar. Estado actual: ${currentStatus}`,
+        `El vehículo debe estar en estado DOCUMENTADO, NO_FACTURADO, POR_ARRIBAR o ENVIADO_A_MATRICULAR para certificar. Estado actual: ${currentStatus}`,
       );
     }
     const isNoFacturado =
       !isUpsert && currentStatus === VehicleStatus.NO_FACTURADO;
+
+    const earlyStatuses = [
+      VehicleStatus.POR_ARRIBAR,
+      VehicleStatus.ENVIADO_A_MATRICULAR,
+    ];
+    const isEarlyState = !isUpsert && earlyStatuses.includes(currentStatus);
 
     let rimsPhotoUrl: string | null = null;
     let vehiclePhotoUrl: string | null = null;
@@ -268,6 +276,53 @@ export class CertificationsService {
         upserted: false,
         newStatus: VehicleStatus.NO_FACTURADO,
         certifiedWhileNoFacturado: true,
+        certificationDate: new Date().toISOString(),
+      };
+    }
+
+    // ── Branch C: vehículo en POR_ARRIBAR o ENVIADO_A_MATRICULAR — NO cambiar status ──
+    if (isEarlyState) {
+      await this.db.collection('certifications').doc(vehicleId).set(certData);
+
+      await this.db
+        .collection('vehicles')
+        .doc(vehicleId)
+        .update({
+          certifiedWhileEarlyState: true,
+          certificationDate: now,
+          certifiedBy: user.uid,
+          originConcessionaire: dto.originConcessionaire ?? null,
+          ...(vehiclePhotoUrl && { photoUrl: vehiclePhotoUrl }),
+        });
+
+      await this.vehiclesService.addStatusHistory(
+        vehicleId,
+        currentStatus,
+        currentStatus,
+        user,
+        vehicle['sede'],
+        `Certificado físicamente (estado temprano: ${currentStatus}) por ${user.displayName ?? user.email} — Km: ${dto.mileage}`,
+      );
+
+      await this.notificationsService.notify({
+        type: 'ESTADO_CAMBIADO',
+        targetRole: RoleEnum.DOCUMENTACION,
+        targetSede: vehicle['sede'],
+        title: '⚠️ Vehículo certificado en estado temprano',
+        body: `El vehículo ${vehicle['chassis']} fue certificado físicamente pero aún está en estado ${currentStatus}`,
+        vehicleId,
+        chassis: vehicle['chassis'] as string,
+      });
+
+      this.logger.log(
+        `Certificación creada (EarlyState branch — ${currentStatus}) para vehículo ${vehicleId}`,
+      );
+
+      return {
+        vehicleId,
+        upserted: false,
+        newStatus: currentStatus,
+        certifiedWhileEarlyState: true,
         certificationDate: new Date().toISOString(),
       };
     }
@@ -499,6 +554,19 @@ export class CertificationsService {
       vehicle['certifiedWhileNoFacturado'] === true &&
       vehicle['status'] === VehicleStatus.NO_FACTURADO;
 
+    const earlyRemoveStatuses = [
+      VehicleStatus.POR_ARRIBAR,
+      VehicleStatus.ENVIADO_A_MATRICULAR,
+    ];
+    const isEarlyStateBranch =
+      vehicle['certifiedWhileEarlyState'] === true &&
+      earlyRemoveStatuses.includes(vehicle['status'] as VehicleStatus);
+
+    // Branch D: vehículo ya avanzó a DOCUMENTADO pero el flag early sigue activo
+    const isDocumentadoWithEarlyFlag =
+      vehicle['certifiedWhileEarlyState'] === true &&
+      vehicle['status'] === VehicleStatus.DOCUMENTADO;
+
     // Eliminar foto de aros de Firebase Storage
     await this.firebase
       .deleteFile(`vehicles/${vehicleId}/rims-photo.jpg`)
@@ -523,8 +591,42 @@ export class CertificationsService {
         vehicle['sede'],
         'Certificación eliminada — vehículo requiere re-certificación antes de continuar',
       );
+    } else if (isEarlyStateBranch) {
+      // Branch C: limpiar flag, el vehículo SE QUEDA en POR_ARRIBAR / ENVIADO_A_MATRICULAR
+      const currentStatus = vehicle['status'] as VehicleStatus;
+      await this.db.collection('vehicles').doc(vehicleId).update({
+        certifiedWhileEarlyState: false,
+        certificationDate: null,
+        certifiedBy: null,
+      });
+
+      await this.vehiclesService.addStatusHistory(
+        vehicleId,
+        currentStatus,
+        currentStatus,
+        user,
+        vehicle['sede'],
+        'Certificación eliminada (estado temprano) — vehículo requiere re-certificación antes de continuar',
+      );
+    } else if (isDocumentadoWithEarlyFlag) {
+      // Branch D: vehículo ya en DOCUMENTADO con flag early activo —
+      // solo limpiar flag, NO revertir status (ya está en DOCUMENTADO)
+      await this.db.collection('vehicles').doc(vehicleId).update({
+        certifiedWhileEarlyState: false,
+        certificationDate: null,
+        certifiedBy: null,
+      });
+
+      await this.vehiclesService.addStatusHistory(
+        vehicleId,
+        VehicleStatus.DOCUMENTADO,
+        VehicleStatus.DOCUMENTADO,
+        user,
+        vehicle['sede'],
+        'Certificación eliminada — vehículo requiere re-certificación antes de continuar',
+      );
     } else {
-      // Branch A: comportamiento anterior — revertir a DOCUMENTADO
+      // Branch A: comportamiento estándar — revertir a DOCUMENTADO
       await this.vehiclesService.changeStatus(
         vehicleId,
         VehicleStatus.DOCUMENTADO,

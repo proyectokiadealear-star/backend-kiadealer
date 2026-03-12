@@ -87,6 +87,7 @@ export class VehiclesService {
       sede,
       status: initialStatus,
       certifiedWhileNoFacturado: false,
+      certifiedWhileEarlyState: false,
       registeredDate: now,
       registrationSentDate: null,
       registrationReceivedDate: null,

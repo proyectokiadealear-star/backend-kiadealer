@@ -57,9 +57,15 @@ export class ServiceOrdersService {
     const isCertifiedNoFacturado =
       vehicle['status'] === VehicleStatus.DOCUMENTADO &&
       vehicle['certifiedWhileNoFacturado'] === true;
+
+    const isCertifiedEarlyState =
+      vehicle['status'] === VehicleStatus.DOCUMENTADO &&
+      vehicle['certifiedWhileEarlyState'] === true;
+
     if (
       vehicle['status'] !== VehicleStatus.CERTIFICADO_STOCK &&
-      !isCertifiedNoFacturado
+      !isCertifiedNoFacturado &&
+      !isCertifiedEarlyState
     ) {
       throw new BadRequestException(
         `El vehículo debe estar CERTIFICADO_STOCK o DOCUMENTADO (con certificación previa) para generar OT. Estado actual: ${vehicle['status']}`,
@@ -704,8 +710,9 @@ export class ServiceOrdersService {
     }
     const now = this.firebase.serverTimestamp();
     // Marcar todos los ítems del checklist como instalados (si los hay)
-    const checklist: Array<{ key: string; installed: boolean }> =
-      (order!['checklist'] ?? []).map((c: any) => ({ ...c, installed: true }));
+    const checklist: Array<{ key: string; installed: boolean }> = (
+      order!['checklist'] ?? []
+    ).map((c: any) => ({ ...c, installed: true }));
     await this.db.collection('service-orders').doc(orderId).update({
       checklist,
       status: 'INSTALACION_COMPLETA',
