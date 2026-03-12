@@ -254,6 +254,8 @@ export class DocumentationController {
   @ApiResponse({ status: 404, description: 'Documentación no encontrada' })
   @Roles(
     RoleEnum.DOCUMENTACION,
+    RoleEnum.ASESOR,
+    RoleEnum.LIDER_TECNICO,
     RoleEnum.JEFE_TALLER,
     RoleEnum.SOPORTE,
     RoleEnum.BODEGUERO,
