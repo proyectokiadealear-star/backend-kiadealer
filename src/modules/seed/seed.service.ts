@@ -258,7 +258,7 @@ export class SeedService {
     const sedes = [
       { name: 'SURMOTOR', code: SedeEnum.SURMOTOR },
       { name: 'SHYRIS', code: SedeEnum.SHYRIS },
-      { name: 'GRANADAS CENTENOS', code: SedeEnum.GRANDA_CENTENO },
+      { name: 'GRANDA CENTENO', code: SedeEnum.GRANDA_CENTENO },
     ];
 
     const accessories = [

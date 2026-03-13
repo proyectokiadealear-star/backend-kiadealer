@@ -103,6 +103,25 @@ export class ReportsService {
     });
   }
 
+  /**
+   * Normaliza cualquier variante de nombre de sede al valor del enum.
+   * Los vehículos en Firestore usan el código (SedeEnum), pero el frontend
+   * puede enviar el nombre del catálogo (ej. 'GRANADAS CENTENOS').
+   */
+  private normalizeSede(raw?: string): string | null {
+    if (!raw) return null;
+    const upper = raw.toUpperCase().trim();
+    // Match directo contra valores del enum
+    if (Object.values(SedeEnum).includes(upper as SedeEnum)) return upper;
+    // Mapa de nombres del catálogo → código SedeEnum
+    const nameToCode: Record<string, SedeEnum> = {
+      'GRANADAS CENTENOS': SedeEnum.GRANDA_CENTENO,
+      'GRANDA CENTENO':    SedeEnum.GRANDA_CENTENO,
+      'GRANDA-CENTENO':    SedeEnum.GRANDA_CENTENO,
+    };
+    return nameToCode[upper] ?? null;
+  }
+
   async getAnalytics(
     user: AuthenticatedUser,
     filters?: { sede?: string; dateFrom?: string; dateTo?: string },
@@ -127,10 +146,11 @@ export class ReportsService {
 
     // Filtro por sede: si no es JEFE_TALLER, forzar la sede del usuario;
     // si lo es pero se pasa filtro de sede, aplicarlo también.
-    // 'ALL' se trata como sin filtro en ambos casos.
-    const sedeFilter = user.role !== RoleEnum.JEFE_TALLER
-      ? (user.sede && user.sede !== SedeEnum.ALL ? user.sede : null)
-      : (filters?.sede && filters.sede !== SedeEnum.ALL ? filters.sede : null);
+    // Normaliza el valor para tolerar nombres de catálogo (ej. 'GRANADAS CENTENOS' → 'GRANDA_CENTENO').
+    const rawSedeFilter = user.role !== RoleEnum.JEFE_TALLER
+      ? user.sede
+      : filters?.sede;
+    const sedeFilter = this.normalizeSede(rawSedeFilter);
     if (sedeFilter) {
       query = query.where('sede', '==', sedeFilter);
     }
@@ -151,7 +171,7 @@ export class ReportsService {
 
     // Filtro en memoria como salvaguarda (por si receptionDate es Timestamp vs string)
     const filtered = all.filter((v) => {
-      if (filters?.sede && user.role === RoleEnum.JEFE_TALLER && v['sede'] !== filters.sede) return false;
+      if (sedeFilter && user.role === RoleEnum.JEFE_TALLER && v['sede'] !== sedeFilter) return false;
       if (fromDate || toDate) {
         const rd = v['receptionDate'];
         if (!rd) return false;
