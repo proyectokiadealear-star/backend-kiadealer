@@ -3,6 +3,7 @@ import { FirebaseService } from '../../firebase/firebase.service';
 import { VehiclesService } from '../vehicles/vehicles.service';
 import { AuthenticatedUser } from '../../common/interfaces/authenticated-user.interface';
 import { RoleEnum } from '../../common/enums/role.enum';
+import { SedeEnum } from '../../common/enums/sede.enum';
 import PDFDocument = require('pdfkit');
 
 @Injectable()
@@ -126,9 +127,10 @@ export class ReportsService {
 
     // Filtro por sede: si no es JEFE_TALLER, forzar la sede del usuario;
     // si lo es pero se pasa filtro de sede, aplicarlo también.
+    // 'ALL' se trata como sin filtro en ambos casos.
     const sedeFilter = user.role !== RoleEnum.JEFE_TALLER
-      ? user.sede
-      : (filters?.sede ?? null);
+      ? (user.sede && user.sede !== SedeEnum.ALL ? user.sede : null)
+      : (filters?.sede && filters.sede !== SedeEnum.ALL ? filters.sede : null);
     if (sedeFilter) {
       query = query.where('sede', '==', sedeFilter);
     }

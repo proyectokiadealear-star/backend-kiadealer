@@ -26,8 +26,14 @@ export class HomeService {
       RoleEnum.SOPORTE,
     ].includes(role as RoleEnum);
     const isTaller = role === RoleEnum.PERSONAL_TALLER;
-    const sede =
-      user.sede && user.sede !== 'ALL' ? user.sede : undefined;
+    // JEFE_TALLER y SOPORTE tienen visibilidad multi-sede — nunca restringir por sede.
+    // Para los demás roles, usar su sede solo si no es 'ALL'.
+    const isMultiSede =
+      user.role === RoleEnum.JEFE_TALLER ||
+      user.role === RoleEnum.SOPORTE ||
+      !user.sede ||
+      user.sede === 'ALL';
+    const sede = isMultiSede ? undefined : user.sede;
 
     // Lanzar todas las queries en paralelo — mismo comportamiento que el
     // cliente anterior, pero consolidado en un único round-trip HTTP.
