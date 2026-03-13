@@ -356,6 +356,92 @@ export class VehiclesService {
   }
 
   // ──────────────────────────────────────────────────────────────────
+  // PREVIEW ENTREGADOS POR RANGO DE AÑOS (verificación antes de borrar)
+  // ──────────────────────────────────────────────────────────────────
+  async previewDeliveredByYear(fromYear: number, toYear: number) {
+    const startTs = new Date(`${fromYear}-01-01T00:00:00.000Z`);
+    const endTs = new Date(`${toYear + 1}-01-01T00:00:00.000Z`);
+
+    // Traer todos los ENTREGADO — el filtro de rango sobre deliveryDate
+    // se aplica en memoria como fallback seguro (evita requerir índice compuesto).
+    const snap = await this.db
+      .collection('vehicles')
+      .where('status', '==', VehicleStatus.ENTREGADO)
+      .get();
+
+    const vehicles = snap.docs
+      .map((d) => d.data())
+      .filter((v) => {
+        if (!v['deliveryDate']) return false;
+        // deliveryDate puede ser Firestore Timestamp o ISO string
+        const raw = v['deliveryDate'];
+        const date: Date | null =
+          typeof raw === 'string'
+            ? new Date(raw)
+            : raw?._seconds
+              ? new Date(raw._seconds * 1000)
+              : raw instanceof Date
+                ? raw
+                : null;
+        if (!date) return false;
+        return date >= startTs && date < endTs;
+      })
+      .map((v) => ({
+        id: v['id'] as string,
+        chassis: v['chassis'] as string,
+        model: v['model'] as string,
+        year: v['year'] as number,
+        color: v['color'] as string,
+        sede: v['sede'] as string,
+        deliveryDate: v['deliveryDate']?._seconds
+          ? new Date(v['deliveryDate']._seconds * 1000).toISOString()
+          : v['deliveryDate'],
+      }));
+
+    return {
+      count: vehicles.length,
+      fromYear,
+      toYear,
+      vehicles,
+    };
+  }
+
+  // ──────────────────────────────────────────────────────────────────
+  // DELETE BATCH ENTREGADOS POR RANGO DE AÑOS — cascada completa
+  // ──────────────────────────────────────────────────────────────────
+  async removeDeliveredByYear(fromYear: number, toYear: number) {
+    // 1. Reutilizar el preview para obtener los IDs exactos a eliminar
+    const { vehicles } = await this.previewDeliveredByYear(fromYear, toYear);
+
+    if (vehicles.length === 0) {
+      return { deleted: 0, errors: [] };
+    }
+
+    const errors: Array<{ id: string; chassis: string; error: string }> = [];
+    let deleted = 0;
+
+    // 2. Eliminar uno a uno reutilizando remove() que ya hace cascada completa
+    for (const v of vehicles) {
+      try {
+        await this.remove(v.id);
+        deleted++;
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
+        errors.push({ id: v.id, chassis: v.chassis, error: msg });
+        this.logger.error(
+          `removeDeliveredByYear: error eliminando ${v.id} (${v.chassis}): ${msg}`,
+        );
+      }
+    }
+
+    this.logger.log(
+      `removeDeliveredByYear(${fromYear}-${toYear}): ${deleted} eliminados, ${errors.length} errores`,
+    );
+
+    return { deleted, errors };
+  }
+
+  // ──────────────────────────────────────────────────────────────────
   // DELETE (JEFE_TALLER / SOPORTE) — cascada completa
   // ──────────────────────────────────────────────────────────────────
   async remove(id: string) {

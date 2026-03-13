@@ -53,7 +53,10 @@ export class VehiclesController {
   })
   @ApiConsumes('application/json')
   @ApiBody({ type: CreateVehicleDto })
-  @ApiResponse({ status: 201, description: 'Vehículo registrado con estado POR_ARRIBAR' })
+  @ApiResponse({
+    status: 201,
+    description: 'Vehículo registrado con estado POR_ARRIBAR',
+  })
   @ApiResponse({ status: 400, description: 'Chasis duplicado o año inválido' })
   @ApiResponse({ status: 401, description: 'Token inválido o ausente' })
   @ApiResponse({ status: 403, description: 'Rol no autorizado' })
@@ -69,7 +72,8 @@ export class VehiclesController {
   @Get('stats/by-sede')
   @ApiOperation({
     summary: 'KPIs de vehículos por sede',
-    description: 'Retorna conteo de vehículos agrupados por sede y estado. **Roles:** JEFE_TALLER, SOPORTE',
+    description:
+      'Retorna conteo de vehículos agrupados por sede y estado. **Roles:** JEFE_TALLER, SOPORTE',
   })
   @ApiResponse({ status: 200, description: 'Mapa de sede → { status: count }' })
   @ApiResponse({ status: 403, description: 'Rol no autorizado' })
@@ -81,11 +85,17 @@ export class VehiclesController {
   @Get('stats/today-deliveries')
   @ApiOperation({
     summary: 'Entregas agendadas para hoy',
-    description: 'Retorna vehículos con estado AGENDADO para la fecha actual. JEFE_TALLER y SOPORTE ven todas las sedes. **Roles:** ASESOR, LIDER_TECNICO, JEFE_TALLER, SOPORTE',
+    description:
+      'Retorna vehículos con estado AGENDADO para la fecha actual. JEFE_TALLER y SOPORTE ven todas las sedes. **Roles:** ASESOR, LIDER_TECNICO, JEFE_TALLER, SOPORTE',
   })
   @ApiResponse({ status: 200, description: 'Lista de vehículos agendados hoy' })
   @ApiResponse({ status: 403, description: 'Rol no autorizado' })
-  @Roles(RoleEnum.ASESOR, RoleEnum.LIDER_TECNICO, RoleEnum.JEFE_TALLER, RoleEnum.SOPORTE)
+  @Roles(
+    RoleEnum.ASESOR,
+    RoleEnum.LIDER_TECNICO,
+    RoleEnum.JEFE_TALLER,
+    RoleEnum.SOPORTE,
+  )
   todayDeliveries(@CurrentUser() user: AuthenticatedUser) {
     return this.svc.todayDeliveries(user);
   }
@@ -94,9 +104,13 @@ export class VehiclesController {
   @Get()
   @ApiOperation({
     summary: 'Listar vehículos con filtros y paginación',
-    description: 'Sin ?sede, cada rol ve solo su sede. JEFE_TALLER y SOPORTE ven todas. Soporta filtros por estado, chasis, cliente y paginación. **Roles:** todos',
+    description:
+      'Sin ?sede, cada rol ve solo su sede. JEFE_TALLER y SOPORTE ven todas. Soporta filtros por estado, chasis, cliente y paginación. **Roles:** todos',
   })
-  @ApiResponse({ status: 200, description: '{ data: Vehicle[], total, page, limit }' })
+  @ApiResponse({
+    status: 200,
+    description: '{ data: Vehicle[], total, page, limit }',
+  })
   @ApiResponse({ status: 401, description: 'Token inválido o ausente' })
   findAll(
     @Query() query: QueryVehiclesDto,
@@ -117,12 +131,22 @@ export class VehiclesController {
   @ApiBody({
     schema: {
       type: 'object',
-      properties: { vehicleIds: { type: 'array', items: { type: 'string' }, maxItems: 50 } },
+      properties: {
+        vehicleIds: { type: 'array', items: { type: 'string' }, maxItems: 50 },
+      },
       required: ['vehicleIds'],
     },
   })
-  @ApiResponse({ status: 200, description: 'Array de potenciales de venta para cada vehículo' })
-  @Roles(RoleEnum.ASESOR, RoleEnum.LIDER_TECNICO, RoleEnum.JEFE_TALLER, RoleEnum.SOPORTE)
+  @ApiResponse({
+    status: 200,
+    description: 'Array de potenciales de venta para cada vehículo',
+  })
+  @Roles(
+    RoleEnum.ASESOR,
+    RoleEnum.LIDER_TECNICO,
+    RoleEnum.JEFE_TALLER,
+    RoleEnum.SOPORTE,
+  )
   getSalePotentialBatch(@Body() body: { vehicleIds: string[] }) {
     return this.svc.getSalePotentialBatch(body.vehicleIds ?? []);
   }
@@ -137,23 +161,156 @@ export class VehiclesController {
       '**Roles:** ASESOR, LIDER_TECNICO, JEFE_TALLER, SOPORTE',
   })
   @ApiParam({ name: 'id', description: 'ID del vehículo (UUID)' })
-  @ApiResponse({ status: 200, description: 'Potencial de venta con desglose y predicciones' })
-  @ApiResponse({ status: 400, description: 'El vehículo no tiene documentación registrada' })
+  @ApiResponse({
+    status: 200,
+    description: 'Potencial de venta con desglose y predicciones',
+  })
+  @ApiResponse({
+    status: 400,
+    description: 'El vehículo no tiene documentación registrada',
+  })
   @ApiResponse({ status: 404, description: 'Vehículo no encontrado' })
-  @Roles(RoleEnum.ASESOR, RoleEnum.LIDER_TECNICO, RoleEnum.JEFE_TALLER, RoleEnum.SOPORTE)
+  @Roles(
+    RoleEnum.ASESOR,
+    RoleEnum.LIDER_TECNICO,
+    RoleEnum.JEFE_TALLER,
+    RoleEnum.SOPORTE,
+  )
   getSalePotential(@Param('id') id: string) {
     return this.svc.getSalePotential(id);
+  }
+
+  // ── PREVIEW ENTREGADOS POR RANGO DE AÑOS ────────────────────────
+  @Get('delivered/preview')
+  @ApiOperation({
+    summary: 'Previsualizar vehículos ENTREGADO en un rango de años',
+    description:
+      'Retorna la lista de vehículos con estado `ENTREGADO` cuya `deliveryDate` cae dentro del rango `fromYear`–`toYear` (inclusive). ' +
+      'Úsalo **antes** de ejecutar la eliminación batch para verificar exactamente qué registros serán afectados. ' +
+      'No modifica ningún dato. **Roles:** JEFE_TALLER, SOPORTE',
+  })
+  @ApiQuery({
+    name: 'fromYear',
+    required: true,
+    type: Number,
+    example: 2021,
+    description: 'Año de inicio del rango (inclusive)',
+  })
+  @ApiQuery({
+    name: 'toYear',
+    required: true,
+    type: Number,
+    example: 2025,
+    description: 'Año de fin del rango (inclusive)',
+  })
+  @ApiResponse({
+    status: 200,
+    description:
+      '{ count: number, fromYear, toYear, vehicles: [{ id, chassis, model, year, color, sede, deliveryDate }] }',
+    schema: {
+      type: 'object',
+      properties: {
+        count: { type: 'number', example: 47 },
+        fromYear: { type: 'number', example: 2021 },
+        toYear: { type: 'number', example: 2025 },
+        vehicles: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              id: { type: 'string' },
+              chassis: { type: 'string' },
+              model: { type: 'string' },
+              year: { type: 'number' },
+              color: { type: 'string' },
+              sede: { type: 'string' },
+              deliveryDate: { type: 'string', format: 'date-time' },
+            },
+          },
+        },
+      },
+    },
+  })
+  @ApiResponse({ status: 403, description: 'Rol no autorizado' })
+  @Roles(RoleEnum.JEFE_TALLER, RoleEnum.SOPORTE)
+  previewDeliveredByYear(
+    @Query('fromYear') fromYear: string,
+    @Query('toYear') toYear: string,
+  ) {
+    return this.svc.previewDeliveredByYear(Number(fromYear), Number(toYear));
+  }
+
+  // ── ELIMINAR ENTREGADOS POR RANGO DE AÑOS (BATCH) ───────────────
+  @Delete('delivered/batch')
+  @ApiOperation({
+    summary: 'Eliminar vehículos ENTREGADO en un rango de años',
+    description:
+      '⚠️ **Operación irreversible.** Elimina permanentemente todos los vehículos con estado `ENTREGADO` ' +
+      'cuya `deliveryDate` cae dentro del rango `fromYear`–`toYear` (inclusive). ' +
+      'Incluye cascada completa: certifications, documentations, deliveryCeremonies, appointments, service-orders, statusHistory y Storage. ' +
+      'Se recomienda ejecutar primero `GET /vehicles/delivered/preview` para confirmar el alcance. **Roles:** JEFE_TALLER, SOPORTE',
+  })
+  @ApiBody({
+    schema: {
+      type: 'object',
+      required: ['fromYear', 'toYear'],
+      properties: {
+        fromYear: {
+          type: 'number',
+          example: 2021,
+          description: 'Año de inicio del rango (inclusive)',
+        },
+        toYear: {
+          type: 'number',
+          example: 2025,
+          description: 'Año de fin del rango (inclusive)',
+        },
+      },
+    },
+  })
+  @ApiResponse({
+    status: 200,
+    description: '{ deleted: number, errors: [] }',
+    schema: {
+      type: 'object',
+      properties: {
+        deleted: { type: 'number', example: 47 },
+        errors: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              id: { type: 'string' },
+              chassis: { type: 'string' },
+              error: { type: 'string' },
+            },
+          },
+        },
+      },
+    },
+  })
+  @ApiResponse({ status: 403, description: 'Rol no autorizado' })
+  @Roles(RoleEnum.JEFE_TALLER, RoleEnum.SOPORTE)
+  removeDeliveredByYear(@Body() body: { fromYear: number; toYear: number }) {
+    return this.svc.removeDeliveredByYear(body.fromYear, body.toYear);
   }
 
   // ── FIND ONE ────────────────────────────────────────────────────
   @Get(':id')
   @ApiOperation({
     summary: 'Detalle de vehículo',
-    description: 'Retorna el vehículo con su certificación y documentación embebidas (si existen). JEFE_TALLER y SOPORTE pueden ver vehículos de cualquier sede. **Roles:** todos',
+    description:
+      'Retorna el vehículo con su certificación y documentación embebidas (si existen). JEFE_TALLER y SOPORTE pueden ver vehículos de cualquier sede. **Roles:** todos',
   })
   @ApiParam({ name: 'id', description: 'ID único del vehículo (UUID)' })
-  @ApiResponse({ status: 200, description: 'Vehículo con certificación y documentación' })
-  @ApiResponse({ status: 403, description: 'El vehículo pertenece a otra sede' })
+  @ApiResponse({
+    status: 200,
+    description: 'Vehículo con certificación y documentación',
+  })
+  @ApiResponse({
+    status: 403,
+    description: 'El vehículo pertenece a otra sede',
+  })
   @ApiResponse({ status: 404, description: 'Vehículo no encontrado' })
   findOne(@Param('id') id: string, @CurrentUser() user: AuthenticatedUser) {
     return this.svc.findOne(id, user);
@@ -163,10 +320,14 @@ export class VehiclesController {
   @Get(':id/status-history')
   @ApiOperation({
     summary: 'Historial de estados del vehículo',
-    description: 'Retorna todos los cambios de estado ordenados cronológicamente. **Roles:** todos',
+    description:
+      'Retorna todos los cambios de estado ordenados cronológicamente. **Roles:** todos',
   })
   @ApiParam({ name: 'id', description: 'ID único del vehículo (UUID)' })
-  @ApiResponse({ status: 200, description: 'Lista de entradas del historial de estado' })
+  @ApiResponse({
+    status: 200,
+    description: 'Lista de entradas del historial de estado',
+  })
   @ApiResponse({ status: 404, description: 'Vehículo no encontrado' })
   getStatusHistory(@Param('id') id: string) {
     return this.svc.getStatusHistory(id);
@@ -199,7 +360,8 @@ export class VehiclesController {
   @Delete(':id')
   @ApiOperation({
     summary: 'Eliminar vehículo',
-    description: 'Elimina el vehículo permanentemente de la base de datos. **Roles:** JEFE_TALLER, SOPORTE',
+    description:
+      'Elimina el vehículo permanentemente de la base de datos. **Roles:** JEFE_TALLER, SOPORTE',
   })
   @ApiParam({ name: 'id', description: 'ID único del vehículo (UUID)' })
   @ApiResponse({ status: 200, description: 'Vehículo eliminado' })
@@ -210,4 +372,3 @@ export class VehiclesController {
     return this.svc.remove(id);
   }
 }
-
