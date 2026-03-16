@@ -30,7 +30,7 @@ export class ServiceOrdersService {
 
   /** Caché TTL para documentations (full-scan costoso) */
   private docsCache: {
-    data: Array<Array<{ key: string; classification: string }>>;
+    data: Array<{ id: string; accessories: Array<{ key: string; classification: string }> }>;
     ts: number;
   } | null = null;
   private readonly docsCacheTtlMs = 5 * 60 * 1000; // 5 minutos
@@ -181,7 +181,13 @@ export class ServiceOrdersService {
 
   async findAll(
     user: AuthenticatedUser,
-    filters?: { sede?: string; status?: string; vehicleId?: string },
+    filters?: {
+      sede?: string;
+      status?: string;
+      vehicleId?: string;
+      page?: number;
+      limit?: number;
+    },
   ) {
     let query: FirebaseFirestore.Query = this.db.collection('service-orders');
 
@@ -221,7 +227,13 @@ export class ServiceOrdersService {
       );
     }
 
-    return results;
+    const total = results.length;
+    const page = Math.max(1, filters?.page ?? 1);
+    const limit = Math.min(100, Math.max(1, filters?.limit ?? 20));
+    const totalPages = Math.ceil(total / limit);
+    const data = results.slice((page - 1) * limit, page * limit);
+
+    return { data, total, page, limit, totalPages };
   }
 
   async findOne(id: string) {
@@ -632,11 +644,15 @@ export class ServiceOrdersService {
 
     if (soldKeys.length === 0) return [];
 
-    // Obtener todos los vehículos con documentación (con caché TTL 5 min)
+    // Obtener todos los vehículos con documentación (con caché TTL 5 min),
+    // excluyendo el vehículo actual para no contaminar el historial con sus propios datos.
     const allDocs = await this.getCachedDocAccessories();
+    const otherDocs = allDocs
+      .filter((entry) => entry.id !== vehicleId)
+      .map((entry) => entry.accessories);
 
-    // Encontrar vehículos con al menos las mismas keys vendidas
-    const similar = allDocs.filter((acc) => {
+    // Encontrar vehículos con al menos una de las mismas keys vendidas
+    const similar = otherDocs.filter((acc) => {
       const soldInDoc = acc
         .filter(
           (a) =>
@@ -649,8 +665,10 @@ export class ServiceOrdersService {
 
     if (similar.length === 0) return [];
 
-    // Calcular probabilidad para accesorios no incluidos
-    const allAccessoryKeys = Object.values(AccessoryKey) as string[];
+    // Calcular probabilidad para accesorios no incluidos (excluir OTROS — no es predecible)
+    const allAccessoryKeys = (Object.values(AccessoryKey) as string[]).filter(
+      (k) => k !== AccessoryKey.OTROS,
+    );
     const notCurrentKeys = allAccessoryKeys.filter(
       (k) => !soldKeys.includes(k),
     );
@@ -759,7 +777,7 @@ export class ServiceOrdersService {
   }
 
   private async getCachedDocAccessories(): Promise<
-    Array<Array<{ key: string; classification: string }>>
+    Array<{ id: string; accessories: Array<{ key: string; classification: string }> }>
   > {
     const now = Date.now();
     if (!this.docsCache || now - this.docsCache.ts > this.docsCacheTtlMs) {
@@ -772,11 +790,12 @@ export class ServiceOrdersService {
         data: snap.docs
           .map((d) => {
             const raw = d.data()?.['accessories'];
-            return Array.isArray(raw)
+            const accessories = Array.isArray(raw)
               ? (raw as Array<{ key: string; classification: string }>)
               : [];
+            return { id: d.id, accessories };
           })
-          .filter((acc) => acc.length > 0),
+          .filter((entry) => entry.accessories.length > 0),
         ts: now,
       };
       this.logger.debug(

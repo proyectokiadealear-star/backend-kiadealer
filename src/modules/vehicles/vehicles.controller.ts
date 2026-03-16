@@ -151,6 +151,58 @@ export class VehiclesController {
     return this.svc.getSalePotentialBatch(body.vehicleIds ?? []);
   }
 
+  // ── ENTREGADOS RESUMEN (dashboard histórico) ────────────────────
+  @Get('entregados/resumen')
+  @ApiOperation({
+    summary: 'Resumen agregado de vehículos ENTREGADO para el dashboard histórico',
+    description:
+      'Calcula en tiempo real el resumen de vehículos ENTREGADO con el mismo shape que ' +
+      'entregados_historico.json (metadata, kpis_seguros, analisis_temporal, analisis_categorico). ' +
+      'Soporta filtros opcionales: año, sede, modelo. **Roles:** JEFE_TALLER, SOPORTE',
+  })
+  @ApiQuery({ name: 'año', required: false, type: Number, example: 2026, description: 'Filtrar por año de entrega' })
+  @ApiQuery({ name: 'sede', required: false, type: String, description: 'Filtrar por sede (ej. SURMOTOR)' })
+  @ApiQuery({ name: 'modelo', required: false, type: String, description: 'Filtrar por modelo (ej. SOLUTO)' })
+  @ApiResponse({ status: 200, description: 'Shape EntregadosJSON con datos en tiempo real' })
+  @Roles(RoleEnum.JEFE_TALLER, RoleEnum.SOPORTE)
+  getEntregadosResumen(
+    @Query('año') año?: string,
+    @Query('sede') sede?: string,
+    @Query('modelo') modelo?: string,
+  ) {
+    return this.svc.getEntregadosResumen({
+      año: año ? Number(año) : undefined,
+      sede: sede || undefined,
+      modelo: modelo || undefined,
+    });
+  }
+
+  // ── CALL CENTER ─────────────────────────────────────────────────
+  @Get('call-center')
+  @ApiOperation({
+    summary: 'Lista call center — vehículos DOCUMENTADO→ENTREGADO con accesorios seguro/telemetría',
+    description:
+      'Retorna vehículos desde DOCUMENTADO hasta ENTREGADO con información de propietario y estado ' +
+      'de sus accesorios de seguro y telemetría. Respuesta paginada compatible con PaginatedResponse<T>. ' +
+      '**Roles:** JEFE_TALLER, SOPORTE',
+  })
+  @ApiQuery({ name: 'page', required: false, type: Number, example: 1, description: 'Página (default 1)' })
+  @ApiQuery({ name: 'limit', required: false, type: Number, example: 100, description: 'Ítems por página (default 100, máx 500)' })
+  @ApiResponse({
+    status: 200,
+    description: 'PaginatedResponse<CallCenterVehicle>',
+  })
+  @ApiResponse({ status: 403, description: 'Rol no autorizado' })
+  @Roles(RoleEnum.JEFE_TALLER, RoleEnum.SOPORTE)
+  getCallCenterList(
+    @Query('page') page?: string,
+    @Query('limit') limit?: string,
+  ) {
+    const parsedPage = page ? Math.max(1, Number(page)) : 1;
+    const parsedLimit = limit ? Math.min(Number(limit), 500) : 100;
+    return this.svc.getCallCenterList(parsedPage, parsedLimit);
+  }
+
   // ── SALE POTENTIAL ──────────────────────────────────────────────
   @Get(':id/sale-potential')
   @ApiOperation({

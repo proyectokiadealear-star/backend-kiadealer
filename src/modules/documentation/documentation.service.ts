@@ -9,6 +9,7 @@ import { FirebaseService } from '../../firebase/firebase.service';
 import { VehiclesService } from '../vehicles/vehicles.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { CreateDocumentationDto } from './dto/create-documentation.dto';
+import { UpdateDocumentationDto } from './dto/update-documentation.dto';
 import { VehicleStatus } from '../../common/enums/vehicle-status.enum';
 import { AccessoryClassification } from '../../common/enums/accessory-key.enum';
 import { RoleEnum } from '../../common/enums/role.enum';
@@ -411,7 +412,8 @@ export class DocumentationService {
         : Promise.resolve(null as string | null),
     ]);
 
-    if (freshVehicleInvoice !== null) data['vehicleInvoiceUrl'] = freshVehicleInvoice;
+    if (freshVehicleInvoice !== null)
+      data['vehicleInvoiceUrl'] = freshVehicleInvoice;
 
     if (freshGiftEmails.length > 0) {
       data['giftEmailUrls'] = freshGiftEmails;
@@ -432,7 +434,7 @@ export class DocumentationService {
 
   async update(
     vehicleId: string,
-    dto: Partial<CreateDocumentationDto>,
+    dto: UpdateDocumentationDto,
     user: AuthenticatedUser,
     files?: {
       vehicleInvoice?: Express.Multer.File;

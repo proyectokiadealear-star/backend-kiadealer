@@ -114,10 +114,11 @@ export class ServiceOrdersController {
   // ── LISTAR OTs ───────────────────────────────────────────
   @Get()
   @ApiOperation({
-    summary: 'Listar órdenes de trabajo',
+    summary: 'Listar órdenes de trabajo (paginado)',
     description:
       'JEFE_TALLER ve todas las sedes. Otros roles sólo ven su propia sede. ' +
-      'PERSONAL_TALLER solo verá OTs asignadas a su uid. **Roles:** todos',
+      'PERSONAL_TALLER solo verá OTs asignadas a su uid. ' +
+      'Retorna `{ data, total, page, limit, totalPages }`. **Roles:** todos',
   })
   @ApiQuery({
     name: 'sede',
@@ -136,7 +137,25 @@ export class ServiceOrdersController {
     required: false,
     description: 'Filtrar por vehículo',
   })
-  @ApiResponse({ status: 200, description: 'Lista de órdenes de trabajo' })
+  @ApiQuery({
+    name: 'page',
+    required: false,
+    type: Number,
+    example: 1,
+    description: 'Número de página (default: 1)',
+  })
+  @ApiQuery({
+    name: 'limit',
+    required: false,
+    type: Number,
+    example: 20,
+    description: 'Resultados por página, máximo 100 (default: 20)',
+  })
+  @ApiResponse({
+    status: 200,
+    description:
+      'Página de órdenes de trabajo. Responde `{ data: ServiceOrder[], total, page, limit, totalPages }`',
+  })
   @Roles(
     RoleEnum.ASESOR,
     RoleEnum.LIDER_TECNICO,
@@ -149,8 +168,16 @@ export class ServiceOrdersController {
     @Query('sede') sede?: string,
     @Query('status') status?: string,
     @Query('vehicleId') vehicleId?: string,
+    @Query('page') page?: string,
+    @Query('limit') limit?: string,
   ) {
-    return this.svc.findAll(user, { sede, status, vehicleId });
+    return this.svc.findAll(user, {
+      sede,
+      status,
+      vehicleId,
+      page: page ? Number(page) : undefined,
+      limit: limit ? Number(limit) : undefined,
+    });
   }
 
   // ── PREDICCIONES ────────────────────────────────────────

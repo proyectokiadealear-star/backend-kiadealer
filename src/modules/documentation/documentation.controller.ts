@@ -24,6 +24,7 @@ import {
 import { IsEnum, IsString, IsNotEmpty } from 'class-validator';
 import { DocumentationService } from './documentation.service';
 import { CreateDocumentationDto } from './dto/create-documentation.dto';
+import { UpdateDocumentationDto } from './dto/update-documentation.dto';
 import { SendToRegistrationDto } from './dto/send-to-registration.dto';
 import { ReceiveRegistrationDto } from './dto/receive-registration.dto';
 import { RevertToPorArribarDto } from './dto/revert-to-por-arribar.dto';
@@ -287,7 +288,7 @@ export class DocumentationController {
   )
   update(
     @Param('vehicleId') vehicleId: string,
-    @Body() dto: Partial<CreateDocumentationDto>,
+    @Body() dto: UpdateDocumentationDto,
     @CurrentUser() user: AuthenticatedUser,
     @UploadedFiles()
     files?: {

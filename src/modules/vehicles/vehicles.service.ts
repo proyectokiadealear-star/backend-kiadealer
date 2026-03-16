@@ -609,6 +609,295 @@ export class VehiclesService {
   }
 
   // ──────────────────────────────────────────────────────────────────
+  // CALL CENTER — lista de ENTREGADO con accesorios (seguro + telemetría)
+  // ──────────────────────────────────────────────────────────────────
+  /**
+   * Retorna todos los vehículos con status ENTREGADO enriquecidos con sus
+   * accesorios de seguro y telemetría.  Usa Firestore getAll() para el
+   * batch-join de documentations — single round-trip, O(1) request.
+   */
+  async getCallCenterList(page = 1, limit = 100) {
+    // 1. Traer vehículos desde DOCUMENTADO hasta ENTREGADO (ya tienen documentación con propietario y accesorios)
+    const CALL_CENTER_STATUSES = [
+      VehicleStatus.DOCUMENTADO,
+      VehicleStatus.ORDEN_GENERADA,
+      VehicleStatus.ASIGNADO,
+      VehicleStatus.EN_INSTALACION,
+      VehicleStatus.INSTALACION_COMPLETA,
+      VehicleStatus.REAPERTURA_OT,
+      VehicleStatus.LISTO_PARA_ENTREGA,
+      VehicleStatus.AGENDADO,
+      VehicleStatus.ENTREGADO,
+    ];
+
+    // Traer TODOS para poder calcular el total y paginar
+    const allSnap = await this.db
+      .collection('vehicles')
+      .where('status', 'in', CALL_CENTER_STATUSES)
+      .get();
+
+    if (allSnap.empty) {
+      return { data: [], total: 0, page, limit, totalPages: 0 };
+    }
+
+    const allVehicles = allSnap.docs.map((d) => d.data());
+    const total = allVehicles.length;
+    const totalPages = Math.ceil(total / limit);
+    const safePage = Math.max(1, Math.min(page, totalPages));
+    const offset = (safePage - 1) * limit;
+    const vehiclesPage = allVehicles.slice(offset, offset + limit);
+
+    const vehicles = vehiclesPage;
+
+    // 2. Batch-fetch documentations (single getAll call)
+    const docRefs = vehicles.map((v) =>
+      this.db.collection('documentations').doc(v['id'] as string),
+    );
+    const docSnaps = await this.db.getAll(...docRefs);
+
+    // 3. Construir mapas vehicleId → accessories[] y vehicleId → clientInfo
+    //    La documentación es la fuente de verdad para clientName/clientId/clientPhone
+    const accMap = new Map<
+      string,
+      Array<{ key: string; classification: string | null }>
+    >();
+    const clientMap = new Map<
+      string,
+      { nombre: string; cedula: string; telefono: string }
+    >();
+    docSnaps.forEach((snap) => {
+      if (!snap.exists) return;
+      const data = snap.data()!;
+      const raw = data['accessories'];
+      accMap.set(
+        snap.id,
+        Array.isArray(raw)
+          ? (raw as Array<{ key: string; classification: string | null }>)
+          : [],
+      );
+      clientMap.set(snap.id, {
+        nombre: (data['clientName'] as string) ?? '',
+        cedula: (data['clientId'] as string) ?? '',
+        telefono: (data['clientPhone'] as string) ?? '',
+      });
+    });
+
+    // 4. Merge y construir DTO liviano
+    const data = vehicles.map((v) => {
+      const id = v['id'] as string;
+      const allAcc = accMap.get(id) ?? [];
+
+      // Evaluar seguro y telemetría a partir de documentación.
+      // Siempre se incluyen ambos en la respuesta independientemente de si
+      // fueron registrados en la documentación o no.
+      const evalAccessory = (
+        key: AccessoryKey,
+      ): { key: string; classification: string | null; vendido: boolean } => {
+        // Busca tanto en minúsculas (valor del enum) como en mayúsculas (compatibilidad)
+        const acc = allAcc.find(
+          (a) =>
+            a.key === key ||
+            a.key === key.toUpperCase() ||
+            a.key.toLowerCase() === key.toLowerCase(),
+        );
+        const classification = acc?.classification ?? null;
+        const vendido =
+          classification === AccessoryClassification.VENDIDO ||
+          classification === AccessoryClassification.OBSEQUIADO;
+        // Retorna la key en MAYÚSCULAS para que coincida con el frontend (constants.ts)
+        return { key: key.toUpperCase(), classification, vendido };
+      };
+
+      const accessories = [
+        evalAccessory(AccessoryKey.SEGURO),
+        evalAccessory(AccessoryKey.TELEMETRIA),
+      ];
+
+      // Prefiere datos de documentación (fuente de verdad);
+      // usa campos del vehículo solo como fallback (p.ej. clientId denormalizado)
+      const client = clientMap.get(id);
+      return {
+        id,
+        chasis: v['chassis'] as string,
+        modelo: v['model'] as string,
+        color: v['color'] as string,
+        año: v['year'] as number,
+        sede: v['sede'] as string,
+        status: v['status'] as string,
+        propietario: {
+          nombre: client?.nombre ?? (v['clientName'] as string) ?? '',
+          cedula: client?.cedula ?? (v['clientId'] as string) ?? '',
+          telefono: client?.telefono ?? (v['clientPhone'] as string) ?? '',
+          celular: client?.telefono ?? (v['clientPhone'] as string) ?? '',
+        },
+        accessories,
+      };
+    });
+
+    // 5. Retornar PaginatedResponse shape (compatible con frontend)
+    return { data, total, page: safePage, limit, totalPages };
+  }
+
+  // ──────────────────────────────────────────────────────────────────
+  // ENTREGADOS RESUMEN — agregado dinámico desde Firestore (dashboard)
+  // ──────────────────────────────────────────────────────────────────
+  /**
+   * Calcula el resumen agregado de vehículos ENTREGADO para un año/rango dado.
+   * Retorna el mismo shape que entregados_historico.json para facilitar la fusión
+   * en el frontend DashboardEntregados.
+   * Soporta filtros opcionales: sede, modelo.
+   */
+  async getEntregadosResumen(opts: {
+    año?: number;
+    sede?: string;
+    modelo?: string;
+  }) {
+    // 1. Traer todos los ENTREGADO
+    let query: FirebaseFirestore.Query = this.db
+      .collection('vehicles')
+      .where('status', '==', VehicleStatus.ENTREGADO);
+
+    const snap = await query.get();
+    if (snap.empty) {
+      return this._emptyEntregadosResumen();
+    }
+
+    // 2. Filtrar en memoria (deliveryDate es campo no indexado combinado con year)
+    const MESES_ES = ['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'];
+
+    const vehicles = snap.docs
+      .map((d) => d.data())
+      .filter((v) => {
+        // Filtro año
+        if (opts.año !== undefined) {
+          const date = this._parseVehicleDate(v['deliveryDate']);
+          if (!date || date.getFullYear() !== opts.año) return false;
+        }
+        // Filtro sede
+        if (opts.sede && v['sede'] !== opts.sede) return false;
+        // Filtro modelo
+        if (opts.modelo && v['model'] !== opts.modelo) return false;
+        return true;
+      });
+
+    if (vehicles.length === 0) {
+      return this._emptyEntregadosResumen();
+    }
+
+    // 3. Batch-fetch documentations para saber si tienen seguro
+    const docRefs = vehicles.map((v) =>
+      this.db.collection('documentations').doc(v['id'] as string),
+    );
+    const docSnaps = await this.db.getAll(...docRefs);
+
+    // Map vehicleId → tieneSeguro
+    const seguroMap = new Map<string, boolean>();
+    docSnaps.forEach((snap) => {
+      if (!snap.exists) return;
+      const raw = snap.data()!['accessories'];
+      const accessories: Array<{ key: string; classification: string }> =
+        Array.isArray(raw) ? raw : [];
+      const seguroAcc = accessories.find(
+        (a) =>
+          a.key === AccessoryKey.SEGURO ||
+          a.key === AccessoryKey.SEGURO.toUpperCase() ||
+          a.key.toLowerCase() === 'seguro',
+      );
+      const tieneSeguro =
+        seguroAcc?.classification === AccessoryClassification.VENDIDO ||
+        seguroAcc?.classification === AccessoryClassification.OBSEQUIADO;
+      seguroMap.set(snap.id, tieneSeguro);
+    });
+
+    // 4. Agregar
+    const conSeguro = vehicles.filter((v) => seguroMap.get(v['id'] as string) === true).length;
+    const sinSeguro = vehicles.length - conSeguro;
+
+    // Por año
+    const añoMap = new Map<number, number>();
+    // Por mes
+    const mesMap = new Map<string, number>(); // key: "Ene 2026"
+    // Por modelo
+    const modeloMap = new Map<string, number>();
+    // Por color
+    const colorMap = new Map<string, number>();
+    // Por sede
+    const sedeMap = new Map<string, number>();
+
+    vehicles.forEach((v) => {
+      const date = this._parseVehicleDate(v['deliveryDate']);
+      if (date) {
+        const año = date.getFullYear();
+        añoMap.set(año, (añoMap.get(año) ?? 0) + 1);
+        const mesLabel = `${MESES_ES[date.getMonth()]} ${año}`;
+        mesMap.set(mesLabel, (mesMap.get(mesLabel) ?? 0) + 1);
+      }
+      const modelo = (v['model'] as string) ?? 'DESCONOCIDO';
+      modeloMap.set(modelo, (modeloMap.get(modelo) ?? 0) + 1);
+      const color = ((v['color'] as string) ?? 'DESCONOCIDO').toUpperCase();
+      colorMap.set(color, (colorMap.get(color) ?? 0) + 1);
+      const sede = (v['sede'] as string) ?? 'DESCONOCIDO';
+      sedeMap.set(sede, (sedeMap.get(sede) ?? 0) + 1);
+    });
+
+    // Ordenar meses cronológicamente
+    const porMesLabel = Array.from(mesMap.entries())
+      .map(([label, cantidad]) => ({ label, cantidad }))
+      .sort((a, b) => {
+        const parse = (l: string) => {
+          const [m, y] = l.split(' ');
+          return parseInt(y) * 100 + MESES_ES.indexOf(m);
+        };
+        return parse(a.label) - parse(b.label);
+      });
+
+    const sortDesc = (map: Map<string, number>) =>
+      Array.from(map.entries())
+        .map(([label, cantidad]) => ({ label, cantidad }))
+        .sort((a, b) => b.cantidad - a.cantidad);
+
+    return {
+      metadata: {
+        fecha_actual: new Date().toISOString().split('T')[0],
+        total_registros: vehicles.length,
+      },
+      kpis_seguros: { SI: conSeguro, NO: sinSeguro },
+      analisis_temporal: {
+        por_año: Array.from(añoMap.entries())
+          .map(([año, cantidad]) => ({ año, cantidad }))
+          .sort((a, b) => a.año - b.año),
+        por_mes_label: porMesLabel,
+      },
+      analisis_categorico: {
+        por_modelo: sortDesc(modeloMap),
+        por_color: sortDesc(colorMap),
+        por_sede: sortDesc(sedeMap),
+      },
+    };
+  }
+
+  /** Retorna el shape vacío cuando no hay datos */
+  private _emptyEntregadosResumen() {
+    return {
+      metadata: { fecha_actual: new Date().toISOString().split('T')[0], total_registros: 0 },
+      kpis_seguros: { SI: 0, NO: 0 },
+      analisis_temporal: { por_año: [], por_mes_label: [] },
+      analisis_categorico: { por_modelo: [], por_color: [], por_sede: [] },
+    };
+  }
+
+  /** Parsea deliveryDate que puede ser Firestore Timestamp, ISO string o Date */
+  private _parseVehicleDate(raw: unknown): Date | null {
+    if (!raw) return null;
+    if (typeof raw === 'string') return new Date(raw);
+    if (raw instanceof Date) return raw;
+    if (typeof raw === 'object' && raw !== null && '_seconds' in raw) {
+      return new Date((raw as { _seconds: number })._seconds * 1000);
+    }
+    return null;
+  }
+
+  // ──────────────────────────────────────────────────────────────────
   // SALE POTENTIAL
   // ──────────────────────────────────────────────────────────────────
   async getSalePotential(vehicleId: string) {
