@@ -161,17 +161,20 @@ export class VehiclesController {
       'Soporta filtros opcionales: año, sede, modelo. **Roles:** JEFE_TALLER, SOPORTE',
   })
   @ApiQuery({ name: 'año', required: false, type: Number, example: 2026, description: 'Filtrar por año de entrega' })
+  @ApiQuery({ name: 'fechaDesde', required: false, type: String, example: '2026-02-28', description: 'Filtrar deliveryDate >= fecha (YYYY-MM-DD)' })
   @ApiQuery({ name: 'sede', required: false, type: String, description: 'Filtrar por sede (ej. SURMOTOR)' })
   @ApiQuery({ name: 'modelo', required: false, type: String, description: 'Filtrar por modelo (ej. SOLUTO)' })
   @ApiResponse({ status: 200, description: 'Shape EntregadosJSON con datos en tiempo real' })
   @Roles(RoleEnum.JEFE_TALLER, RoleEnum.SOPORTE)
   getEntregadosResumen(
     @Query('año') año?: string,
+    @Query('fechaDesde') fechaDesde?: string,
     @Query('sede') sede?: string,
     @Query('modelo') modelo?: string,
   ) {
     return this.svc.getEntregadosResumen({
       año: año ? Number(año) : undefined,
+      fechaDesde: fechaDesde || undefined,
       sede: sede || undefined,
       modelo: modelo || undefined,
     });

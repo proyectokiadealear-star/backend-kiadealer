@@ -749,6 +749,7 @@ export class VehiclesService {
    */
   async getEntregadosResumen(opts: {
     año?: number;
+    fechaDesde?: string; // "YYYY-MM-DD" — filtra deliveryDate >= este valor
     sede?: string;
     modelo?: string;
   }) {
@@ -768,10 +769,16 @@ export class VehiclesService {
     const vehicles = snap.docs
       .map((d) => d.data())
       .filter((v) => {
-        // Filtro año
+        const date = this._parseVehicleDate(v['deliveryDate']);
+        // Filtro año exacto
         if (opts.año !== undefined) {
-          const date = this._parseVehicleDate(v['deliveryDate']);
           if (!date || date.getFullYear() !== opts.año) return false;
+        }
+        // Filtro fechaDesde: solo vehículos con deliveryDate >= fechaDesde
+        if (opts.fechaDesde) {
+          if (!date) return false;
+          const desde = new Date(opts.fechaDesde + 'T00:00:00Z');
+          if (date < desde) return false;
         }
         // Filtro sede
         if (opts.sede && v['sede'] !== opts.sede) return false;
