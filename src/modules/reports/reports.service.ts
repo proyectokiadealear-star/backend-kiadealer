@@ -370,7 +370,7 @@ export class ReportsService {
 
     const orders = ordersSnap.docs.map((d) => d.data());
     const total = orders.length;
-    const completed = orders.filter((o) => o['status'] === 'INSTALACION_COMPLETA' || o['status'] === 'LISTO_ENTREGA').length;
+    const completed = orders.filter((o) => o['status'] === 'INSTALACION_COMPLETA' || o['status'] === 'LISTO_ENTREGA' || o['status'] === 'LISTO_PARA_ENTREGA').length;
     const pending = total - completed;
 
     return { technicianId: uid, totalAssigned: total, completed, pending };

@@ -75,6 +75,7 @@ export class AppointmentsService {
       vehicleId: dto.vehicleId,
       chassis: vehicle['chassis'],
       model: vehicle['model'],
+      color: vehicle['color'] ?? null,
       sede: vehicle['sede'],
       clientName: vehicle['clientName'] ?? null,
       clientId: vehicle['clientId'] ?? null,
@@ -167,9 +168,11 @@ export class AppointmentsService {
     if (dateFrom) docs = docs.filter((d) => d['scheduledDate'] >= dateFrom);
     if (dateTo) docs = docs.filter((d) => d['scheduledDate'] <= dateTo);
 
-    // ── Retrocompatibilidad: enriquecer docs legacy que no tienen clientName/clientId ──
-    // Sólo se hace una lectura de vehículo por cada apt que le falte el campo.
-    const missing = docs.filter((d) => d['clientName'] === undefined && d['vehicleId']);
+    // ── Retrocompatibilidad: enriquecer docs legacy que les falten campos del vehículo ──
+    // Aplica a docs que no tengan clientName O que no tengan color (campo añadido después).
+    const missing = docs.filter(
+      (d) => (d['clientName'] === undefined || d['color'] === undefined) && d['vehicleId'],
+    );
     if (missing.length > 0) {
       const vehicleIds = [...new Set(missing.map((d) => d['vehicleId'] as string))];
       const vehicleSnaps = await Promise.all(
@@ -179,10 +182,18 @@ export class AppointmentsService {
         vehicleSnaps.filter((s) => s.exists).map((s) => [s.id, s.data()]),
       );
       docs = docs.map((d) => {
-        if (d['clientName'] !== undefined) return d;
+        const needsEnrich =
+          d['clientName'] === undefined || d['color'] === undefined;
+        if (!needsEnrich) return d;
         const v = vehicleMap.get(d['vehicleId'] as string);
         if (!v) return d;
-        return { ...d, clientName: v['clientName'] ?? null, clientId: v['clientId'] ?? null };
+        return {
+          ...d,
+          clientName: d['clientName'] !== undefined ? d['clientName'] : (v['clientName'] ?? null),
+          clientId:   d['clientId']   !== undefined ? d['clientId']   : (v['clientId']   ?? null),
+          color:      d['color']      !== undefined ? d['color']      : (v['color']      ?? null),
+          model:      d['model']      !== undefined ? d['model']      : (v['model']      ?? null),
+        };
       });
     }
     // ─────────────────────────────────────────────────────────────────────────────────

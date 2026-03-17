@@ -491,7 +491,7 @@ export class ServiceOrdersService {
     }
 
     await this.db.collection('service-orders').doc(orderId).update({
-      status: 'LISTO_ENTREGA',
+      status: 'LISTO_PARA_ENTREGA',
       updatedAt: this.firebase.serverTimestamp(),
     });
 
