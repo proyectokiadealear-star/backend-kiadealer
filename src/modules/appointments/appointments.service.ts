@@ -147,7 +147,7 @@ export class AppointmentsService {
     // no sea suya (ej: fue creada por otro asesor o desde el web).
     if (vehicleId) {
       query = query.where('vehicleId', '==', vehicleId);
-    } else if (user.role === RoleEnum.JEFE_TALLER || user.role === RoleEnum.SOPORTE) {
+    } else if (user.role === RoleEnum.JEFE_TALLER || user.role === RoleEnum.SOPORTE || user.role === RoleEnum.SUPERVISOR) {
       // Ve todo — sin restricción de sede
     } else if (user.role === RoleEnum.LIDER_TECNICO || user.role === RoleEnum.PERSONAL_TALLER || user.role === RoleEnum.DOCUMENTACION) {
       // Ve todas las citas de su sede

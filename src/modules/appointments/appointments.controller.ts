@@ -62,7 +62,7 @@ export class AppointmentsController {
     description: 'Array de horarios ocupados. Ej: ["09:00", "11:00"]',
     schema: { type: 'array', items: { type: 'string' }, example: ['09:00', '11:00'] },
   })
-  @Roles(RoleEnum.ASESOR, RoleEnum.LIDER_TECNICO, RoleEnum.JEFE_TALLER, RoleEnum.SOPORTE)
+  @Roles(RoleEnum.ASESOR, RoleEnum.LIDER_TECNICO, RoleEnum.JEFE_TALLER, RoleEnum.SOPORTE, RoleEnum.SUPERVISOR)
   getOccupiedSlots(
     @Query('advisorId') advisorId: string,
     @Query('date') date: string,
@@ -83,7 +83,7 @@ export class AppointmentsController {
   @ApiQuery({ name: 'dateTo', required: false, description: 'Fecha fin filtro (YYYY-MM-DD)', example: '2026-03-31' })
   @ApiQuery({ name: 'vehicleId', required: false, description: 'Filtrar por ID de vehículo específico (ej: pantalla de ceremonia)', example: 'abc-123' })
   @ApiResponse({ status: 200, description: 'Lista de agendamientos ordenada por fecha ascendente' })
-  @Roles(RoleEnum.ASESOR, RoleEnum.DOCUMENTACION ,RoleEnum.LIDER_TECNICO, RoleEnum.JEFE_TALLER, RoleEnum.SOPORTE)
+  @Roles(RoleEnum.ASESOR, RoleEnum.DOCUMENTACION ,RoleEnum.LIDER_TECNICO, RoleEnum.JEFE_TALLER, RoleEnum.SOPORTE, RoleEnum.SUPERVISOR)
   findAll(
     @CurrentUser() user: AuthenticatedUser,
     @Query('dateFrom') dateFrom?: string,

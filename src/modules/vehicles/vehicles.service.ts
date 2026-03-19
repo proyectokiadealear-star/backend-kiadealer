@@ -196,7 +196,7 @@ export class VehiclesService {
 
     if (query.sede) {
       ref = ref.where('sede', '==', query.sede);
-    } else if (user.role !== RoleEnum.JEFE_TALLER) {
+    } else if (user.role !== RoleEnum.JEFE_TALLER && user.role !== RoleEnum.SUPERVISOR) {
       ref = ref.where('sede', '==', user.sede);
     }
 
@@ -286,7 +286,7 @@ export class VehiclesService {
     const vehicle = doc.data()!;
 
     // Control de sede
-    if (user.role !== RoleEnum.JEFE_TALLER && vehicle['sede'] !== user.sede) {
+    if (user.role !== RoleEnum.JEFE_TALLER && user.role !== RoleEnum.SUPERVISOR && vehicle['sede'] !== user.sede) {
       throw new ForbiddenException('No tienes acceso a este vehículo');
     }
 
@@ -591,7 +591,7 @@ export class VehiclesService {
       .collection('vehicles')
       .where('status', '==', VehicleStatus.AGENDADO);
 
-    if (user.role !== RoleEnum.JEFE_TALLER) {
+    if (user.role !== RoleEnum.JEFE_TALLER && user.role !== RoleEnum.SUPERVISOR) {
       ref = ref.where('sede', '==', user.sede);
     }
 

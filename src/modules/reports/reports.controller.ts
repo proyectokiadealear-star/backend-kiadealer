@@ -35,7 +35,7 @@ export class ReportsController {
 
   @Get('analytics')
   @ApiOperation({ summary: 'Analytics y KPIs (JEFE_TALLER y SOPORTE)' })
-  @Roles(RoleEnum.JEFE_TALLER, RoleEnum.SOPORTE)
+  @Roles(RoleEnum.JEFE_TALLER, RoleEnum.SOPORTE, RoleEnum.SUPERVISOR)
   getAnalytics(
     @CurrentUser() user: AuthenticatedUser,
     @Query('sede') sede?: string,

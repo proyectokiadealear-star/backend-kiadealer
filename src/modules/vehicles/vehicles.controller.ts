@@ -77,7 +77,7 @@ export class VehiclesController {
   })
   @ApiResponse({ status: 200, description: 'Mapa de sede → { status: count }' })
   @ApiResponse({ status: 403, description: 'Rol no autorizado' })
-  @Roles(RoleEnum.JEFE_TALLER, RoleEnum.SOPORTE)
+  @Roles(RoleEnum.JEFE_TALLER, RoleEnum.SOPORTE, RoleEnum.SUPERVISOR)
   statsBySede(@Query('sede') sede?: string) {
     return this.svc.statsBySede(sede);
   }
@@ -95,6 +95,7 @@ export class VehiclesController {
     RoleEnum.LIDER_TECNICO,
     RoleEnum.JEFE_TALLER,
     RoleEnum.SOPORTE,
+    RoleEnum.SUPERVISOR,
   )
   todayDeliveries(@CurrentUser() user: AuthenticatedUser) {
     return this.svc.todayDeliveries(user);
@@ -165,7 +166,7 @@ export class VehiclesController {
   @ApiQuery({ name: 'sede', required: false, type: String, description: 'Filtrar por sede (ej. SURMOTOR)' })
   @ApiQuery({ name: 'modelo', required: false, type: String, description: 'Filtrar por modelo (ej. SOLUTO)' })
   @ApiResponse({ status: 200, description: 'Shape EntregadosJSON con datos en tiempo real' })
-  @Roles(RoleEnum.JEFE_TALLER, RoleEnum.SOPORTE)
+  @Roles(RoleEnum.JEFE_TALLER, RoleEnum.SOPORTE, RoleEnum.SUPERVISOR)
   getEntregadosResumen(
     @Query('año') año?: string,
     @Query('fechaDesde') fechaDesde?: string,
@@ -196,7 +197,7 @@ export class VehiclesController {
     description: 'PaginatedResponse<CallCenterVehicle>',
   })
   @ApiResponse({ status: 403, description: 'Rol no autorizado' })
-  @Roles(RoleEnum.JEFE_TALLER, RoleEnum.SOPORTE)
+  @Roles(RoleEnum.JEFE_TALLER, RoleEnum.SOPORTE, RoleEnum.SUPERVISOR)
   getCallCenterList(
     @Query('page') page?: string,
     @Query('limit') limit?: string,

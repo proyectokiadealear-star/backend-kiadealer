@@ -146,7 +146,7 @@ export class ReportsService {
 
     // Filtro por sede en servidor (campo único — no necesita índice compuesto)
     // Normaliza el valor para tolerar nombres de catálogo (ej. 'GRANADAS CENTENOS' → 'GRANDA_CENTENO').
-    const rawSedeFilter = user.role !== RoleEnum.JEFE_TALLER
+    const rawSedeFilter = user.role !== RoleEnum.JEFE_TALLER && user.role !== RoleEnum.SUPERVISOR
       ? user.sede
       : filters?.sede;
     const sedeFilter = this.normalizeSede(rawSedeFilter);
