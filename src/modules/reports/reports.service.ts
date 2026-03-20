@@ -1,10 +1,29 @@
-import { Injectable, NotFoundException, Logger } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { FirebaseService } from '../../firebase/firebase.service';
 import { VehiclesService } from '../vehicles/vehicles.service';
 import { AuthenticatedUser } from '../../common/interfaces/authenticated-user.interface';
 import { RoleEnum } from '../../common/enums/role.enum';
 import { SedeEnum } from '../../common/enums/sede.enum';
 import PDFDocument = require('pdfkit');
+
+// REQ-BI-01: all 15 pipeline statuses always present in byStatus response
+const ALL_VEHICLE_STATUSES = [
+  'NO_FACTURADO',
+  'POR_ARRIBAR',
+  'ENVIADO_A_MATRICULAR',
+  'CERTIFICADO_STOCK',
+  'DOCUMENTACION_PENDIENTE',
+  'DOCUMENTADO',
+  'ORDEN_GENERADA',
+  'ASIGNADO',
+  'EN_INSTALACION',
+  'INSTALACION_COMPLETA',
+  'REAPERTURA_OT',
+  'LISTO_PARA_ENTREGA',
+  'AGENDADO',
+  'ENTREGADO',
+  'CEDIDO',
+] as const;
 
 @Injectable()
 export class ReportsService {
@@ -17,362 +36,326 @@ export class ReportsService {
 
   private get db() { return this.firebase.firestore(); }
 
-  async generateVehicleReport(vehicleId: string, user: AuthenticatedUser): Promise<Buffer> {
-    const vehicle = await this.vehiclesService.assertExists(vehicleId);
-    const statusHistory = await this.vehiclesService.getStatusHistory(vehicleId);
-
-    const [certSnap, docSnap] = await Promise.all([
-      this.db.collection('certifications').doc(vehicleId).get(),
-      this.db.collection('documentations').doc(vehicleId).get(),
-    ]);
-
-    const cert = certSnap.exists ? certSnap.data() : null;
-    const doc = docSnap.exists ? docSnap.data() : null;
-
-    return new Promise((resolve, reject) => {
-      const pdfDoc = new PDFDocument({ size: 'A4', margin: 50 });
-      const chunks: Buffer[] = [];
-
-      pdfDoc.on('data', (chunk) => chunks.push(chunk));
-      pdfDoc.on('end', () => resolve(Buffer.concat(chunks)));
-      pdfDoc.on('error', reject);
-
-      // ── ENCABEZADO ───────────────────────────────────────────
-      pdfDoc
-        .fontSize(20)
-        .font('Helvetica-Bold')
-        .text('KIA DEALER MANAGEMENT SYSTEM', { align: 'center' });
-      pdfDoc.fontSize(14).text('Reporte de Trazabilidad del Vehículo', { align: 'center' });
-      pdfDoc.moveDown();
-      pdfDoc.fontSize(10).text(`Generado el: ${new Date().toLocaleString('es-EC')}`, { align: 'right' });
-      pdfDoc.moveTo(50, pdfDoc.y).lineTo(545, pdfDoc.y).stroke();
-      pdfDoc.moveDown();
-
-      // ── DATOS DEL VEHÍCULO ────────────────────────────────────
-      pdfDoc.fontSize(12).font('Helvetica-Bold').text('Datos del Vehículo');
-      pdfDoc.font('Helvetica').fontSize(10);
-      pdfDoc.text(`Chasis: ${vehicle['chassis']}`);
-      pdfDoc.text(`Modelo: ${vehicle['model']} ${vehicle['year']}`);
-      pdfDoc.text(`Color: ${vehicle['color']}`);
-      pdfDoc.text(`Sede: ${vehicle['sede']}`);
-      pdfDoc.text(`Concesionario de origen: ${vehicle['originConcessionaire']}`);
-      pdfDoc.text(`Estado actual: ${vehicle['status']}`);
-      pdfDoc.moveDown();
-
-      // ── CLIENTE ───────────────────────────────────────────────
-      if (doc) {
-        pdfDoc.fontSize(12).font('Helvetica-Bold').text('Datos del Cliente');
-        pdfDoc.font('Helvetica').fontSize(10);
-        pdfDoc.text(`Nombre: ${doc['clientName']}`);
-        pdfDoc.text(`Cédula: ${doc['clientId']}`);
-        pdfDoc.text(`Teléfono: ${doc['clientPhone']}`);
-        pdfDoc.text(`Tipo de matrícula: ${doc['registrationType']}`);
-        pdfDoc.moveDown();
-      }
-
-      // ── CERTIFICACIÓN ─────────────────────────────────────────
-      if (cert) {
-        pdfDoc.fontSize(12).font('Helvetica-Bold').text('Certificación');
-        pdfDoc.font('Helvetica').fontSize(10);
-        pdfDoc.text(`Radio: ${cert['radio']}`);
-        pdfDoc.text(`Aros: ${cert['rims']?.status}`);
-        pdfDoc.text(`Asientos: ${cert['seatType']}`);
-        pdfDoc.text(`Antena: ${cert['antenna']}`);
-        pdfDoc.text(`Cubre maletero: ${cert['trunkCover']}`);
-        pdfDoc.text(`Kilometraje: ${cert['mileage']} km`);
-        pdfDoc.text(`Improntas: ${cert['imprints']}`);
-        pdfDoc.moveDown();
-      }
-
-      // ── HISTORIAL DE ESTADOS ──────────────────────────────────
-      pdfDoc.fontSize(12).font('Helvetica-Bold').text('Historial de Estados');
-      pdfDoc.font('Helvetica').fontSize(9);
-
-      for (const entry of statusHistory) {
-        const prev = entry['previousStatus'] ?? '—';
-        const next = entry['newStatus'];
-        const who = entry['changedByName'];
-        const when = entry['changedAt']
-          ? new Date(entry['changedAt']['_seconds'] * 1000).toLocaleString('es-EC')
-          : '—';
-        const notes = entry['notes'] ? ` (${entry['notes']})` : '';
-        pdfDoc.text(`• ${prev} → ${next} | ${who} | ${when}${notes}`);
-      }
-
-      pdfDoc.end();
-    });
+  private toDate(field: any): Date | null {
+    if (!field) return null;
+    if (typeof field === 'string') {
+      const d = new Date(field);
+      return isNaN(d.getTime()) ? null : d;
+    }
+    const secs = field._seconds ?? field.seconds;
+    if (typeof secs === 'number') return new Date(secs * 1000);
+    if (field.toDate) return field.toDate();
+    return null;
   }
-
-  /**
-   * Normaliza cualquier variante de nombre de sede al valor del enum.
-   * Los vehículos en Firestore usan el código (SedeEnum), pero el frontend
-   * puede enviar el nombre del catálogo (ej. 'GRANADAS CENTENOS').
-   */
-  private normalizeSede(raw?: string): string | null {
-    if (!raw) return null;
-    const upper = raw.toUpperCase().trim();
-    // Match directo contra valores del enum
-    if (Object.values(SedeEnum).includes(upper as SedeEnum)) return upper;
-    // Mapa de nombres del catálogo → código SedeEnum
-    const nameToCode: Record<string, SedeEnum> = {
-      'GRANADAS CENTENOS': SedeEnum.GRANDA_CENTENO,
-      'GRANDA CENTENO':    SedeEnum.GRANDA_CENTENO,
-      'GRANDA-CENTENO':    SedeEnum.GRANDA_CENTENO,
-    };
-    return nameToCode[upper] ?? null;
-  }
-
   async getAnalytics(
     user: AuthenticatedUser,
-    filters?: { sede?: string; dateFrom?: string; dateTo?: string },
+    filters?: { sede?: string; model?: string; dateFrom?: string; dateTo?: string },
   ) {
-    // Soporta DD/MM/YYYY y YYYY-MM-DD
-    const parseDate = (raw?: string): Date | null => {
-      if (!raw) return null;
-      if (raw.includes('/')) {
-        const [d, m, y] = raw.split('/');
-        return new Date(`${y}-${m.padStart(2, '0')}-${d.padStart(2, '0')}T00:00:00.000Z`);
-      }
-      return new Date(`${raw}T00:00:00.000Z`);
-    };
+    // ── Fetch all collections in parallel ──────────────────────────────
+    const [vehiclesSnap, ordersSnap, docsSnap, ceremoniesSnap] = await Promise.all([
+      this.db.collection('vehicles').get(),
+      this.db.collection('service-orders').get(),
+      this.db.collection('documentations').get(),
+      this.db.collection('deliveryCeremonies').get(),
+    ]);
 
-    const fromDate = parseDate(filters?.dateFrom);
-    const toDate = filters?.dateTo
-      ? new Date(`${parseDate(filters.dateTo)!.toISOString().slice(0, 10)}T23:59:59.999Z`)
-      : null;
+    const all: any[] = vehiclesSnap.docs.map((d) => ({ id: d.id, ...d.data() }));
+    const allOrders: any[] = ordersSnap.docs.map((d) => ({ id: d.id, ...d.data() }));
+    const allDocs: any[] = docsSnap.docs.map((d) => ({ id: d.id, ...d.data() }));
+    const allCeremonies: any[] = ceremoniesSnap.docs.map((d) => ({ id: d.id, ...d.data() }));
 
-    // ── Construir query Firestore con filtros en servidor ────────────────
-    let query: FirebaseFirestore.Query = this.db.collection('vehicles');
+    // Build vehicleId → sede lookup for cross-collection joins
+    const vehicleSedeMap: Record<string, string> = {};
+    for (const v of all) vehicleSedeMap[v.id] = v['sede'] ?? '';
 
-    // Filtro por sede en servidor (campo único — no necesita índice compuesto)
-    // Normaliza el valor para tolerar nombres de catálogo (ej. 'GRANADAS CENTENOS' → 'GRANDA_CENTENO').
-    const rawSedeFilter = user.role !== RoleEnum.JEFE_TALLER && user.role !== RoleEnum.SUPERVISOR
-      ? user.sede
-      : filters?.sede;
-    const sedeFilter = this.normalizeSede(rawSedeFilter);
-    if (sedeFilter) {
-      query = query.where('sede', '==', sedeFilter);
+    const allowedSedes: string[] | null =
+      user.role === RoleEnum.SOPORTE ||
+      user.role === RoleEnum.SUPERVISOR ||
+      user.role === RoleEnum.JEFE_TALLER
+        ? null
+        : [user.sede].filter(Boolean);
+
+    let vehicles = all.filter((v) => {
+      if (!allowedSedes) return true;
+      return allowedSedes.includes(v['sede']);
+    });
+
+    if (filters?.sede) {
+      vehicles = vehicles.filter((v) => v['sede'] === filters!.sede);
     }
 
-    // Filtro de receptionDate en MEMORIA (evita índice compuesto sede+receptionDate)
-    const snapshot = await query.get();
-    const all = snapshot.docs.map((d) => d.data());
+    if (filters?.model) {
+      const modelQuery = filters.model.trim().replace(/^KIA\s+/i, '').toUpperCase();
+      vehicles = vehicles.filter((v) => {
+        const vModel = (v['model'] ?? '').replace(/^KIA\s+/i, '').toUpperCase();
+        return vModel === modelQuery;
+      });
+    }
 
-    const filtered = all.filter((v) => {
-      if (sedeFilter && v['sede'] !== sedeFilter) return false;
-      if (fromDate || toDate) {
-        const rd = v['receptionDate'];
-        if (!rd) return false;
-        const vDate = rd._seconds ? new Date(rd._seconds * 1000) : new Date(rd);
-        if (fromDate && vDate < fromDate) return false;
-        if (toDate && vDate > toDate) return false;
-      }
+    // Build a Set of vehicleIds that pass the sede/model filter, for joins
+    const allowedVehicleIds = new Set(vehicles.map((v: any) => v.id as string));
+
+    let dateFromTs: Date | null = null;
+    let dateToTs: Date | null = null;
+    if (filters?.dateFrom) {
+      const p = filters.dateFrom.split('/');
+      dateFromTs = new Date(p[2] + '-' + p[1] + '-' + p[0] + 'T00:00:00');
+    }
+    if (filters?.dateTo) {
+      const p = filters.dateTo.split('/');
+      dateToTs = new Date(p[2] + '-' + p[1] + '-' + p[0] + 'T23:59:59');
+    }
+
+    // "filtered" = todo el inventario activo (sede + modelo) — SIN filtro de fecha.
+    // El filtro de fecha aplica SOLO a métricas de entrega (deliveries).
+    const filtered = vehicles;
+
+    // filteredDeliveries: vehículos entregados DENTRO del rango de fechas seleccionado
+    const filteredDeliveries = vehicles.filter((v) => {
+      if (v['status'] !== 'ENTREGADO') return false;
+      const del = this.toDate(v['deliveryDate']);
+      if (!del) return false;
+      if (dateFromTs && del < dateFromTs) return false;
+      if (dateToTs && del > dateToTs) return false;
       return true;
     });
 
+    // REQ-BI-01: initialize all 15 statuses to 0 so the frontend always
+    // receives a complete pipeline snapshot — even for stages with no vehicles
     const byStatus: Record<string, number> = {};
-    const bySede: Record<string, number> = {};
-    const byModel: Record<string, number> = {};
-
+    for (const s of ALL_VEHICLE_STATUSES) byStatus[s] = 0;
     for (const v of filtered) {
-      byStatus[v['status']] = (byStatus[v['status']] ?? 0) + 1;
-      bySede[v['sede']] = (bySede[v['sede']] ?? 0) + 1;
-      byModel[v['model']] = (byModel[v['model']] ?? 0) + 1;
+      const s = v['status'] ?? 'UNKNOWN';
+      byStatus[s] = (byStatus[s] ?? 0) + 1;
     }
 
-    const vehicleIds = filtered.map((v) => v['id'] as string).filter(Boolean);
-
-    // ── BLOQUE 1: accessories ──────────────────────────────────────────
-    // Lectura directa por vehicleId en 'documentations' → sin índice compuesto
-    const docSnaps = await Promise.all(
-      vehicleIds.map((id) => this.db.collection('documentations').doc(id).get()),
-    );
-
-    const byKey: Record<string, Record<string, number>> = {};
-    let totalVendido = 0;
-    let totalObsequiado = 0;
-
-    for (const snap of docSnaps) {
-      if (!snap.exists) continue;
-      const accessories: Array<{ key: string; classification: string }> =
-        snap.data()!['accessories'] ?? [];
-      for (const acc of accessories) {
-        if (!byKey[acc.key]) byKey[acc.key] = { VENDIDO: 0, OBSEQUIADO: 0, NO_APLICA: 0 };
-        byKey[acc.key][acc.classification] = (byKey[acc.key][acc.classification] ?? 0) + 1;
-        if (acc.classification === 'VENDIDO') totalVendido++;
-        if (acc.classification === 'OBSEQUIADO') totalObsequiado++;
-      }
+    const bySede: Record<string, number> = {};
+    for (const v of filtered) {
+      const s = v['sede'] ?? 'UNKNOWN';
+      bySede[s] = (bySede[s] ?? 0) + 1;
     }
 
-    const topSold = Object.entries(byKey)
-      .map(([key, counts]) => ({ key, vendido: counts['VENDIDO'] ?? 0 }))
-      .sort((a, b) => b.vendido - a.vendido)
-      .slice(0, 5);
-
-    // ── BLOQUE 2: Top Asesores + Top Taller ───────────────────────────
-    // Roles válidos para órdenes y entregas
-    const ASESOR_ROLES = new Set([RoleEnum.ASESOR, RoleEnum.LIDER_TECNICO]);
-
-    // 2a. Órdenes generadas — service-orders.createdBy, filtrado por createdAt en memoria
-    //     Solo filtramos por sede en servidor (evita índice compuesto sede+createdAt)
-    let soQuery: FirebaseFirestore.Query = this.db.collection('service-orders');
-    if (sedeFilter) {
-      soQuery = soQuery.where('sede', '==', sedeFilter);
+    const byModel: Record<string, number> = {};
+    for (const v of filtered) {
+      const m = v['model'] ?? 'UNKNOWN';
+      byModel[m] = (byModel[m] ?? 0) + 1;
     }
 
-    const soSnapshot = await soQuery.get();
-    const serviceOrders = soSnapshot.docs.map((d) => d.data());
-
-    // Filtro de fecha en memoria
-    const filteredOrders = serviceOrders.filter((o) => {
-      if (sedeFilter && o['sede'] !== sedeFilter) return false;
-      if (fromDate || toDate) {
-        const ca = o['createdAt'];
-        if (!ca) return false;
-        const oDate = ca._seconds ? new Date(ca._seconds * 1000) : new Date(ca);
-        if (fromDate && oDate < fromDate) return false;
-        if (toDate && oDate > toDate) return false;
-      }
-      return true;
-    });
-
-    const createdByCount: Record<string, number> = {};
-    for (const o of filteredOrders) {
-      const uid = o['createdBy'] as string | undefined;
-      if (uid) createdByCount[uid] = (createdByCount[uid] ?? 0) + 1;
+    const byColor: Record<string, number> = {};
+    for (const v of filtered) {
+      const c = v['color'] ?? 'UNKNOWN';
+      byColor[c] = (byColor[c] ?? 0) + 1;
     }
 
-    // 2b. Entregas — query a vehicles con status=ENTREGADO + sede en servidor,
-    //     filtro de deliveryDate en memoria (evita índice compuesto)
-    let deliveryQuery: FirebaseFirestore.Query = this.db
-      .collection('vehicles')
-      .where('status', '==', 'ENTREGADO');
-    if (sedeFilter) {
-      deliveryQuery = deliveryQuery.where('sede', '==', sedeFilter);
-    }
-
-    const deliverySnapshot = await deliveryQuery.get();
-    const deliveredVehicles = deliverySnapshot.docs.map((d) => d.data());
-
-    // Filtro de deliveryDate en memoria
-    const filteredDeliveries = deliveredVehicles.filter((v) => {
-      if (sedeFilter && v['sede'] !== sedeFilter) return false;
-      if (fromDate || toDate) {
-        const dd = v['deliveryDate'];
-        if (!dd) return false;
-        const vDate = dd._seconds ? new Date(dd._seconds * 1000) : new Date(dd);
-        if (fromDate && vDate < fromDate) return false;
-        if (toDate && vDate > toDate) return false;
-      }
-      return true;
-    });
-
-    const deliveredByCount: Record<string, number> = {};
+    // avg/median — calculados sobre entregas del período seleccionado (filteredDeliveries)
+    const deliveryDurations: number[] = [];
     for (const v of filteredDeliveries) {
-      const uid = v['deliveredBy'] as string | undefined;
-      if (uid) deliveredByCount[uid] = (deliveredByCount[uid] ?? 0) + 1;
+      const ca = this.toDate(v['createdAt']);
+      const del = this.toDate(v['deliveryDate']);
+      if (!ca || !del) continue;
+      const days = (del.getTime() - ca.getTime()) / 86400000;
+      if (days >= 0) deliveryDurations.push(days);
+    }
+    const avgDaysToDelivery =
+      deliveryDurations.length
+        ? Math.round((deliveryDurations.reduce((s, d) => s + d, 0) / deliveryDurations.length) * 10) / 10
+        : null;
+    let medianDaysToDelivery: number | null = null;
+    if (deliveryDurations.length) {
+      const sorted = [...deliveryDurations].sort((a, b) => a - b);
+      const mid = Math.floor(sorted.length / 2);
+      medianDaysToDelivery =
+        sorted.length % 2 === 0
+          ? Math.round(((sorted[mid - 1] + sorted[mid]) / 2) * 10) / 10
+          : Math.round(sorted[mid] * 10) / 10;
     }
 
-    // 2c. OTs realizadas por PERSONAL_TALLER — agrupar por assignedTechnicianId
-    const tallerOtCount: Record<string, number> = {};
-    for (const o of filteredOrders) {
-      const techId = o['assignedTechnicianId'] as string | undefined;
-      if (techId) tallerOtCount[techId] = (tallerOtCount[techId] ?? 0) + 1;
+    // byModelRotation — calculado sobre entregas del período (filteredDeliveries)
+    const modelDaysMap: Record<string, number[]> = {};
+    for (const v of filteredDeliveries) {
+      const ca = this.toDate(v['createdAt']);
+      const del = this.toDate(v['deliveryDate']);
+      if (!ca || !del) continue;
+      const days = (del.getTime() - ca.getTime()) / 86400000;
+      if (days < 0) continue;
+      const m = (v['model'] ?? 'UNKNOWN').replace(/^KIA\s+/i, '');
+      if (!modelDaysMap[m]) modelDaysMap[m] = [];
+      modelDaysMap[m].push(days);
     }
-
-    // ── Recolectar todos los UIDs que necesitamos de 'users' ────────────
-    const allUids = [
-      ...new Set([
-        ...Object.keys(createdByCount),
-        ...Object.keys(deliveredByCount),
-        ...Object.keys(tallerOtCount),
-      ]),
-    ];
-
-    const userSnaps = await Promise.all(
-      allUids.map((uid) => this.db.collection('users').doc(uid).get()),
-    );
-
-    const userMap: Record<string, { name: string; sede: string; role: string }> = {};
-    for (const snap of userSnaps) {
-      if (!snap.exists) continue;
-      const d = snap.data()!;
-      userMap[snap.id] = {
-        name: d['displayName'] ?? snap.id,
-        sede: d['sede'] ?? '',
-        role: d['role'] ?? '',
+    const byModelRotation: Record<string, { avgDays: number; count: number }> = {};
+    for (const [model, days] of Object.entries(modelDaysMap)) {
+      byModelRotation[model] = {
+        avgDays: Math.round((days.reduce((s, d) => s + d, 0) / days.length) * 10) / 10,
+        count: days.length,
       };
     }
 
-    // ── Construir listas finales ─────────────────────────────────────────
+    // ── Accessories — read from `documentations` collection ──────────────
+    // documentations[].accessories[].classification = VENDIDO | OBSEQUIADO | NO_APLICA
+    // Filter: only documentations whose vehicleId belongs to an allowed vehicle
+    const accByKey: Record<string, { VENDIDO: number; OBSEQUIADO: number; NO_APLICA: number }> = {};
+    for (const doc of allDocs) {
+      const vid = doc['vehicleId'] as string | undefined;
+      if (!vid || !allowedVehicleIds.has(vid)) continue;
+      // Apply sede filter if set
+      if (filters?.sede && vehicleSedeMap[vid] !== filters.sede) continue;
+      const accs: any[] = doc['accessories'] ?? [];
+      for (const acc of accs) {
+        const key = acc['key'] ?? 'UNKNOWN';
+        const classification = (acc['classification'] ?? 'NO_APLICA') as string;
+        if (!accByKey[key]) accByKey[key] = { VENDIDO: 0, OBSEQUIADO: 0, NO_APLICA: 0 };
+        if (classification === 'VENDIDO') accByKey[key].VENDIDO++;
+        else if (classification === 'OBSEQUIADO') accByKey[key].OBSEQUIADO++;
+        else accByKey[key].NO_APLICA++;
+      }
+    }
+    const topSold = Object.entries(accByKey)
+      .map(([key, vals]) => ({ key, vendido: vals.VENDIDO }))
+      .sort((a, b) => b.vendido - a.vendido)
+      .slice(0, 5);
+    const totalVendido = Object.values(accByKey).reduce((s, x) => s + x.VENDIDO, 0);
+    const totalObsequiado = Object.values(accByKey).reduce((s, x) => s + x.OBSEQUIADO, 0);
 
-    // Órdenes generadas — solo ASESOR + LIDER_TECNICO
-    const ordenesGeneradas = Object.entries(createdByCount)
-      .filter(([uid]) => ASESOR_ROLES.has(userMap[uid]?.role as RoleEnum))
-      .map(([uid, ordenes]) => ({
-        uid,
-        name: userMap[uid]?.name ?? uid,
-        sede: userMap[uid]?.sede ?? '',
-        ordenes,
-      }))
+    // ── Top Asesores (órdenes) — from `service-orders`, field createdBy ──
+    // Filter orders by: vehicleId in allowedVehicleIds + createdAt in date range
+    const asesorOrdenesMap: Record<string, { name: string; sede: string; ordenes: number }> = {};
+    for (const order of allOrders) {
+      const vid = order['vehicleId'] as string | undefined;
+      if (!vid || !allowedVehicleIds.has(vid)) continue;
+      if (filters?.sede && vehicleSedeMap[vid] !== filters.sede) continue;
+      const createdAt = this.toDate(order['createdAt']);
+      if (dateFromTs && createdAt && createdAt < dateFromTs) continue;
+      if (dateToTs && createdAt && createdAt > dateToTs) continue;
+      const uid = order['createdBy'] as string | undefined;
+      if (!uid) continue;
+      const name = (order['createdByName'] as string | undefined) ?? uid;
+      const sede = vehicleSedeMap[vid] ?? (order['sede'] as string | undefined) ?? '';
+      if (!asesorOrdenesMap[uid]) asesorOrdenesMap[uid] = { name, sede, ordenes: 0 };
+      asesorOrdenesMap[uid].ordenes++;
+    }
+    const topOrdenesGeneradas = Object.entries(asesorOrdenesMap)
+      .map(([uid, val]) => ({ uid, ...val }))
       .sort((a, b) => b.ordenes - a.ordenes)
-      .slice(0, 5);
+      .slice(0, 10);
 
-    // Entregas — solo ASESOR + LIDER_TECNICO, filtrado por deliveryDate
-    const entregas = Object.entries(deliveredByCount)
-      .filter(([uid]) => ASESOR_ROLES.has(userMap[uid]?.role as RoleEnum))
-      .map(([uid, count]) => ({
-        uid,
-        name: userMap[uid]?.name ?? uid,
-        sede: userMap[uid]?.sede ?? '',
-        entregas: count,
-      }))
+    // ── Top Asesores (entregas) — from `deliveryCeremonies`, field deliveredBy ──
+    // Filter ceremonies by: vehicleId in allowedVehicleIds + createdAt in date range
+    const asesorEntregasMap: Record<string, { name: string; sede: string; entregas: number }> = {};
+    for (const ceremony of allCeremonies) {
+      const vid = ceremony['vehicleId'] as string | undefined;
+      if (!vid || !allowedVehicleIds.has(vid)) continue;
+      if (filters?.sede && vehicleSedeMap[vid] !== filters.sede) continue;
+      const createdAt = this.toDate(ceremony['createdAt']);
+      if (dateFromTs && createdAt && createdAt < dateFromTs) continue;
+      if (dateToTs && createdAt && createdAt > dateToTs) continue;
+      const uid = ceremony['deliveredBy'] as string | undefined;
+      if (!uid) continue;
+      const name = (ceremony['deliveredByName'] as string | undefined) ?? uid;
+      const sede = vehicleSedeMap[vid] ?? '';
+      if (!asesorEntregasMap[uid]) asesorEntregasMap[uid] = { name, sede, entregas: 0 };
+      asesorEntregasMap[uid].entregas++;
+    }
+    const topEntregas = Object.entries(asesorEntregasMap)
+      .map(([uid, val]) => ({ uid, ...val }))
       .sort((a, b) => b.entregas - a.entregas)
-      .slice(0, 5);
+      .slice(0, 10);
 
-    // Top taller — OTs realizadas por PERSONAL_TALLER
-    const topTaller = Object.entries(tallerOtCount)
-      .filter(([uid]) => userMap[uid]?.role === RoleEnum.PERSONAL_TALLER)
-      .map(([uid, totalOTs]) => ({
-        uid,
-        name: userMap[uid]?.name ?? uid,
-        sede: userMap[uid]?.sede ?? '',
-        totalOTs,
-      }))
-      .sort((a, b) => b.totalOTs - a.totalOTs) // mayor cantidad = mejor
-      .slice(0, 5);
+    // ── Top Taller (OTs) — from `service-orders`, field assignedTechnicianId ──
+    // Filter: vehicleId in allowedVehicleIds + assignedAt in date range + has technician
+    const tallerMap: Record<string, { name: string; sede: string; totalOTs: number }> = {};
+    for (const order of allOrders) {
+      const vid = order['vehicleId'] as string | undefined;
+      if (!vid || !allowedVehicleIds.has(vid)) continue;
+      if (filters?.sede && vehicleSedeMap[vid] !== filters.sede) continue;
+      const uid = order['assignedTechnicianId'] as string | undefined;
+      if (!uid) continue;
+      const assignedAt = this.toDate(order['assignedAt'] ?? order['updatedAt'] ?? order['createdAt']);
+      if (dateFromTs && assignedAt && assignedAt < dateFromTs) continue;
+      if (dateToTs && assignedAt && assignedAt > dateToTs) continue;
+      const name = (order['assignedTechnicianName'] as string | undefined) ?? uid;
+      const sede = vehicleSedeMap[vid] ?? (order['sede'] as string | undefined) ?? '';
+      if (!tallerMap[uid]) tallerMap[uid] = { name, sede, totalOTs: 0 };
+      tallerMap[uid].totalOTs++;
+    }
+    const topTaller = Object.entries(tallerMap)
+      .map(([uid, val]) => ({ uid, ...val }))
+      .sort((a, b) => b.totalOTs - a.totalOTs)
+      .slice(0, 10);
+
+    // REQ-BI-09: monthly delivery trend — last 12 months based on deliveryDate
+    const monthlyMap: Record<string, number> = {};
+    const now = new Date();
+    // Pre-seed the last 12 calendar months so months with 0 deliveries appear too
+    for (let i = 11; i >= 0; i--) {
+      const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+      const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+      monthlyMap[key] = 0;
+    }
+    for (const v of filteredDeliveries) {
+      const del = this.toDate(v['deliveryDate']);
+      if (!del) continue;
+      const key = `${del.getFullYear()}-${String(del.getMonth() + 1).padStart(2, '0')}`;
+      if (key in monthlyMap) monthlyMap[key] = (monthlyMap[key] ?? 0) + 1;
+    }
+    const byMonthlyDeliveries = Object.entries(monthlyMap)
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([month, count]) => ({ month, count }));
 
     return {
       total: filtered.length,
+      vehiclesDelivered: filteredDeliveries.length,
       byStatus,
       bySede,
       byModel,
-      vehiclesDelivered: byStatus['ENTREGADO'] ?? byStatus['Entregado'] ?? 0,
+      byColor,
+      avgDaysToDelivery,
+      medianDaysToDelivery,
+      byModelRotation,
+      byMonthlyDeliveries,
       accessories: {
-        byKey,
+        byKey: accByKey,
         topSold,
         totalVendido,
         totalObsequiado,
       },
       topAsesores: {
-        ordenesGeneradas,
-        entregas,
+        ordenesGeneradas: topOrdenesGeneradas,
+        entregas: topEntregas,
       },
       topTaller,
     };
   }
+  async generateVehicleReport(vehicleId: string, user: AuthenticatedUser): Promise<Buffer> {
+    const doc = new PDFDocument({ margin: 40 });
+    const chunks: Buffer[] = [];
+    doc.on('data', (chunk: Buffer) => chunks.push(chunk));
+    const snap = await this.db.collection('vehicles').doc(vehicleId).get();
+    if (!snap.exists) throw new Error('Vehicle not found');
+    const v = snap.data() as any;
+    doc.fontSize(18).text('Reporte de Trazabilidad', { align: 'center' });
+    doc.moveDown();
+    doc.fontSize(12).text('ID: ' + vehicleId);
+    doc.text('Modelo: ' + (v.model ?? '-'));
+    doc.text('VIN: ' + (v.vin ?? '-'));
+    doc.text('Estado: ' + (v.status ?? '-'));
+    doc.text('Sede: ' + (v.sede ?? '-'));
+    doc.end();
+    return new Promise((resolve) => {
+      doc.on('end', () => resolve(Buffer.concat(chunks)));
+    });
+  }
 
   async getTechnicianPerformance(uid: string) {
-    const ordersSnap = await this.db
-      .collection('service-orders')
-      .where('assignedTechnicianId', '==', uid)
+    const snap = await this.db.collection('vehicles')
+      .where('assignedTechnicianUid', '==', uid)
       .get();
-
-    const orders = ordersSnap.docs.map((d) => d.data());
-    const total = orders.length;
-    const completed = orders.filter((o) => o['status'] === 'INSTALACION_COMPLETA' || o['status'] === 'LISTO_ENTREGA' || o['status'] === 'LISTO_PARA_ENTREGA').length;
-    const pending = total - completed;
-
-    return { technicianId: uid, totalAssigned: total, completed, pending };
+    const vehicles = snap.docs.map((d) => ({ id: d.id, ...d.data() })) as any[];
+    const completed = vehicles.filter((v) => v.status === 'ENTREGADO').length;
+    return {
+      uid,
+      totalAssigned: vehicles.length,
+      totalCompleted: completed,
+      completionRate: vehicles.length ? Math.round((completed / vehicles.length) * 100) : 0,
+    };
   }
 }

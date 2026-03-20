@@ -1,4 +1,4 @@
-﻿import { Controller, Get, Param, Query, Res, UseGuards } from '@nestjs/common';
+import { Controller, Get, Param, Query, Res, UseGuards } from '@nestjs/common';
 import type { Response } from 'express';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { ReportsService } from './reports.service';
@@ -17,7 +17,7 @@ export class ReportsController {
   constructor(private readonly svc: ReportsService) {}
 
   @Get('vehicle/:vehicleId')
-  @ApiOperation({ summary: 'Generar PDF de trazabilidad del vehÃ­culo' })
+  @ApiOperation({ summary: 'Generar PDF de trazabilidad del vehículo' })
   @Roles(RoleEnum.JEFE_TALLER, RoleEnum.ASESOR, RoleEnum.LIDER_TECNICO)
   async generateVehicleReport(
     @Param('vehicleId') vehicleId: string,
@@ -39,17 +39,17 @@ export class ReportsController {
   getAnalytics(
     @CurrentUser() user: AuthenticatedUser,
     @Query('sede') sede?: string,
+    @Query('model') model?: string,
     @Query('dateFrom') dateFrom?: string,
     @Query('dateTo') dateTo?: string,
   ) {
-    return this.svc.getAnalytics(user, { sede, dateFrom, dateTo });
+    return this.svc.getAnalytics(user, { sede, model, dateFrom, dateTo });
   }
 
   @Get('technician-performance/:uid')
-  @ApiOperation({ summary: 'Rendimiento de un tÃ©cnico' })
+  @ApiOperation({ summary: 'Rendimiento de un técnico' })
   @Roles(RoleEnum.PERSONAL_TALLER, RoleEnum.JEFE_TALLER)
   getTechnicianPerformance(@Param('uid') uid: string) {
     return this.svc.getTechnicianPerformance(uid);
   }
 }
-
