@@ -19,6 +19,7 @@ import {
 import { AuthenticatedUser } from '../../common/interfaces/authenticated-user.interface';
 import { NotificationsService } from '../notifications/notifications.service';
 import { v4 as uuidv4 } from 'uuid';
+import { EtlRow } from './excel.service';
 
 @Injectable()
 export class VehiclesService {
@@ -1253,5 +1254,174 @@ export class VehiclesService {
     // Nota: la caché almacena accesorios (arrays), no IDs; el filtro por vehicleId
     // ya fue aplicado al construir 'allDocs' — se mantiene consistente.
     return this.docsCache.data;
+  }
+
+  // ──────────────────────────────────────────────────────────────────
+  // ETL SYNC — carga masiva desde Excel KDCS vía microservicio Python
+  // ──────────────────────────────────────────────────────────────────
+
+  /** Estados que el ETL nunca debe modificar — el vehículo ya está en proceso activo o avance documental */
+  private readonly ETL_PROTECTED_STATUSES = new Set<VehicleStatus>([
+    VehicleStatus.ENVIADO_A_MATRICULAR,
+    VehicleStatus.DOCUMENTADO,
+    VehicleStatus.CERTIFICADO_STOCK,
+    VehicleStatus.ORDEN_GENERADA,
+    VehicleStatus.ASIGNADO,
+    VehicleStatus.EN_INSTALACION,
+    VehicleStatus.INSTALACION_COMPLETA,
+    VehicleStatus.REAPERTURA_OT,
+    VehicleStatus.LISTO_PARA_ENTREGA,
+    VehicleStatus.AGENDADO,
+    VehicleStatus.ENTREGADO,
+    VehicleStatus.CEDIDO,
+  ]);
+
+  async syncFromJson(data: EtlRow[]) {
+    let insertados = 0;
+    let actualizados = 0;
+    let ignorados = 0;
+
+    // Usuario sintético para statusHistory de operaciones ETL
+    const etlUser = {
+      uid: 'ETL_SYSTEM',
+      email: 'etl@system',
+      displayName: 'Carga Masiva ETL',
+      role: 'DOCUMENTACION' as const,
+      sede: null as unknown as string,
+      active: true,
+    };
+
+    for (const row of data) {
+      if (!row.chassis) {
+        ignorados++;
+        continue;
+      }
+
+      const chassis = row.chassis;
+
+      // Buscar por chassis (single-field index automático en Firestore)
+      const snapshot = await this.db
+        .collection('vehicles')
+        .where('chassis', '==', chassis)
+        .limit(1)
+        .get();
+
+      // ── INSERT: chasis nuevo ───────────────────────────────────────
+      if (snapshot.empty) {
+        const vehicleId = uuidv4();
+        const status = (row.status as VehicleStatus) ?? VehicleStatus.NO_FACTURADO;
+
+        await this.db
+          .collection('vehicles')
+          .doc(vehicleId)
+          .set({
+            id: vehicleId,
+            chassis,
+            sede: row.sede ?? null,
+            model: row.model ?? null,
+            color: row.color ?? null,
+            status,
+            year: null,
+            originConcessionaire: null,
+            photoUrl: null,
+            certifiedWhileNoFacturado: false,
+            certifiedWhileEarlyState: false,
+            clientName: row.clientName ?? null,
+            clientId: row.clientId ?? null,
+            clientPhone: row.clientPhone ?? null,
+            createdAt: row.createdAt
+              ? new Date(row.createdAt)
+              : this.firebase.serverTimestamp(),
+            deliveryDate: row.deliveryDate
+              ? new Date(row.deliveryDate)
+              : null,
+            registeredDate: this.firebase.serverTimestamp(),
+            registrationSentDate: null,
+            registrationReceivedDate: null,
+            receptionDate: null,
+            certificationDate: null,
+            documentationDate: null,
+            installationCompleteDate: null,
+            registeredBy: 'ETL_SYSTEM',
+            certifiedBy: null,
+            documentedBy: null,
+            installedBy: null,
+            deliveredBy: null,
+            updatedAt: this.firebase.serverTimestamp(),
+          });
+
+        // Registrar en statusHistory
+        const sedeValue = (row.sede as SedeEnum) ?? SedeEnum.SURMOTOR;
+        await this.addStatusHistory(
+          vehicleId,
+          null,
+          status,
+          etlUser as unknown as AuthenticatedUser,
+          sedeValue,
+          `Creado por carga masiva ETL — Chasis: ${chassis}`,
+        );
+
+        insertados++;
+        continue;
+      }
+
+      // ── VEHÍCULO EXISTENTE ─────────────────────────────────────────
+      const existingDoc = snapshot.docs[0];
+      const existente = existingDoc.data();
+      const vehicleId = existente['id'] as string;
+      const statusActual = existente['status'] as VehicleStatus;
+      const newStatus = (row.status as VehicleStatus) ?? VehicleStatus.NO_FACTURADO;
+
+      // IGNORAR: estado protegido — el vehículo está en proceso activo
+      if (this.ETL_PROTECTED_STATUSES.has(statusActual)) {
+        ignorados++;
+        continue;
+      }
+
+      // IGNORAR: estado no cambió
+      if (statusActual === newStatus) {
+        ignorados++;
+        continue;
+      }
+
+      // UPDATE: estado cambió
+      const esAnulacion = newStatus === VehicleStatus.NO_FACTURADO;
+
+      await this.db
+        .collection('vehicles')
+        .doc(vehicleId)
+        .update({
+          status: newStatus,
+          sede: row.sede ?? existente['sede'],
+          model: row.model ?? existente['model'],
+          color: row.color ?? existente['color'],
+          deliveryDate: row.deliveryDate
+            ? new Date(row.deliveryDate)
+            : null,
+          clientName: esAnulacion ? null : (row.clientName ?? null),
+          clientId: esAnulacion ? null : (row.clientId ?? null),
+          clientPhone: esAnulacion ? null : (row.clientPhone ?? null),
+          updatedAt: this.firebase.serverTimestamp(),
+        });
+
+      // Registrar en statusHistory
+      const sedeValue = (existente['sede'] as SedeEnum) ?? SedeEnum.SURMOTOR;
+      await this.addStatusHistory(
+        vehicleId,
+        statusActual,
+        newStatus,
+        etlUser as unknown as AuthenticatedUser,
+        sedeValue,
+        `ETL: ${statusActual} → ${newStatus}`,
+      );
+
+      actualizados++;
+    }
+
+    this.logger.log(
+      `syncFromJson: total=${data.length} insertados=${insertados} actualizados=${actualizados} ignorados=${ignorados}`,
+    );
+
+    return { total: data.length, insertados, actualizados, ignorados };
   }
 }

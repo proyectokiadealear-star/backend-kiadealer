@@ -33,13 +33,17 @@ import { Roles } from '../../common/decorators/roles.decorator';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { RoleEnum } from '../../common/enums/role.enum';
 import type { AuthenticatedUser } from '../../common/interfaces/authenticated-user.interface';
+import { ExcelService } from './excel.service';
 
 @ApiTags('Vehicles')
 @ApiBearerAuth()
 @UseGuards(FirebaseAuthGuard, RolesGuard)
 @Controller('vehicles')
 export class VehiclesController {
-  constructor(private readonly svc: VehiclesService) {}
+  constructor(
+    private readonly svc: VehiclesService,
+    private readonly excelSvc: ExcelService,
+  ) {}
 
   // ── CREATE ──────────────────────────────────────────────────────
   @Post()
@@ -66,6 +70,82 @@ export class VehiclesController {
     @CurrentUser() user: AuthenticatedUser,
   ) {
     return this.svc.create(dto, user);
+  }
+
+  // ── CARGA MASIVA ETL — PREVIEW (sin escritura en DB) ────────────
+  @Post('preview-excel')
+  @UseInterceptors(FileInterceptor('file'))
+  @ApiOperation({
+    summary: 'Preview del inventario Excel KDCS (sin escribir en DB)',
+    description:
+      'Procesa el Excel vía ETL Python y devuelve los registros parseados **sin tocar Firestore**. ' +
+      'Úsalo para mostrar una vista previa al usuario antes de confirmar la carga. **Roles:** DOCUMENTACION',
+  })
+  @ApiConsumes('multipart/form-data')
+  @ApiBody({
+    schema: {
+      type: 'object',
+      properties: {
+        file: { type: 'string', format: 'binary', description: 'Archivo Excel KDCS (.xlsx).' },
+      },
+      required: ['file'],
+    },
+  })
+  @ApiResponse({ status: 201, description: 'Registros parseados por el ETL: { total, data[] }' })
+  @ApiResponse({ status: 401, description: 'Token inválido o ausente' })
+  @ApiResponse({ status: 403, description: 'Rol no autorizado' })
+  @ApiResponse({ status: 422, description: 'Archivo inválido o columnas faltantes' })
+  @ApiResponse({ status: 500, description: 'ETL no disponible o error interno' })
+  @Roles(RoleEnum.DOCUMENTACION)
+  async previewExcel(@UploadedFile() file: Express.Multer.File) {
+    return this.excelSvc.procesarExcel(file.buffer, file.originalname);
+  }
+
+  // ── CARGA MASIVA ETL — CONFIRMAR (upsert en Firestore) ──────────
+  @Post('cargar-excel')
+  @UseInterceptors(FileInterceptor('file'))
+  @ApiOperation({
+    summary: 'Carga masiva de inventario desde Excel KDCS',
+    description:
+      'Recibe el archivo Excel KDCS, lo procesa vía el microservicio ETL Python y ejecuta ' +
+      'un upsert inteligente en Firestore. Vehículos en proceso activo (ORDEN_GENERADA+) no se modifican. ' +
+      '**Roles:** DOCUMENTACION',
+  })
+  @ApiConsumes('multipart/form-data')
+  @ApiBody({
+    schema: {
+      type: 'object',
+      properties: {
+        file: {
+          type: 'string',
+          format: 'binary',
+          description: 'Archivo Excel KDCS (.xlsx). Máximo 10 MB. Header en fila 9.',
+        },
+      },
+      required: ['file'],
+    },
+  })
+  @ApiResponse({
+    status: 201,
+    description: 'Resultado del upsert: { total, insertados, actualizados, ignorados }',
+    schema: {
+      type: 'object',
+      properties: {
+        total:       { type: 'number', example: 412 },
+        insertados:  { type: 'number', example: 5 },
+        actualizados:{ type: 'number', example: 23 },
+        ignorados:   { type: 'number', example: 384 },
+      },
+    },
+  })
+  @ApiResponse({ status: 401, description: 'Token inválido o ausente' })
+  @ApiResponse({ status: 403, description: 'Rol no autorizado' })
+  @ApiResponse({ status: 422, description: 'Archivo inválido o columnas faltantes' })
+  @ApiResponse({ status: 500, description: 'ETL no disponible o error interno' })
+  @Roles(RoleEnum.DOCUMENTACION)
+  async cargarExcel(@UploadedFile() file: Express.Multer.File) {
+    const { data } = await this.excelSvc.procesarExcel(file.buffer, file.originalname);
+    return this.svc.syncFromJson(data);
   }
 
   // ── STATS ───────────────────────────────────────────────────────
