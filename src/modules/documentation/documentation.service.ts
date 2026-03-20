@@ -128,11 +128,24 @@ export class DocumentationService {
       );
 
     const now = this.firebase.serverTimestamp();
+
+    // Si el vehículo ya fue certificado físicamente antes de que llegara la documentación
+    // (certifiedWhileEarlyState: certificado en POR_ARRIBAR/ENVIADO_A_MATRICULAR,
+    //  certifiedWhileNoFacturado: certificado en NO_FACTURADO),
+    // debe saltar directo a CERTIFICADO_STOCK sin pasar por DOCUMENTADO.
+    const wasCertifiedEarly =
+      !isPending &&
+      !allAccessoriesNoAplica &&
+      (vehicle['certifiedWhileEarlyState'] === true ||
+        vehicle['certifiedWhileNoFacturado'] === true);
+
     const newStatus = isPending
       ? VehicleStatus.DOCUMENTACION_PENDIENTE
       : allAccessoriesNoAplica
         ? VehicleStatus.LISTO_PARA_ENTREGA
-        : VehicleStatus.DOCUMENTADO;
+        : wasCertifiedEarly
+          ? VehicleStatus.CERTIFICADO_STOCK
+          : VehicleStatus.DOCUMENTADO;
 
     const docData = {
       vehicleId,
@@ -163,7 +176,9 @@ export class DocumentationService {
     await this.vehiclesService.changeStatus(vehicleId, newStatus, user, {
       notes: isPending
         ? `Documentación guardada como pendiente por ${user.displayName ?? user.email} — Cliente: ${dto.clientName} (${dto.clientId})`
-        : `Vehículo documentado por ${user.displayName ?? user.email} — Cliente: ${dto.clientName} (${dto.clientId}), Pago: ${dto.paymentMethod}`,
+        : wasCertifiedEarly
+          ? `Vehículo documentado y auto-avanzado a CERTIFICADO_STOCK por ${user.displayName ?? user.email} — ya certificado físicamente (flag: ${vehicle['certifiedWhileEarlyState'] ? 'certifiedWhileEarlyState' : 'certifiedWhileNoFacturado'}) — Cliente: ${dto.clientName} (${dto.clientId})`
+          : `Vehículo documentado por ${user.displayName ?? user.email} — Cliente: ${dto.clientName} (${dto.clientId}), Pago: ${dto.paymentMethod}`,
       extraFields: {
         documentationDate: isPending ? null : now,
         documentedBy: user.uid,
@@ -680,14 +695,26 @@ export class DocumentationService {
     }
 
     if (isCompleting) {
-      // Transición real de estado: DOCUMENTACION_PENDIENTE → DOCUMENTADO
+      // Si el vehículo ya fue certificado físicamente antes de que llegara la documentación,
+      // debe saltar directo a CERTIFICADO_STOCK en vez de quedarse en DOCUMENTADO.
+      const wasCertifiedEarly =
+        vehicle['certifiedWhileEarlyState'] === true ||
+        vehicle['certifiedWhileNoFacturado'] === true;
+
+      const completionStatus = wasCertifiedEarly
+        ? VehicleStatus.CERTIFICADO_STOCK
+        : VehicleStatus.DOCUMENTADO;
+
+      // Transición real de estado: DOCUMENTACION_PENDIENTE → completionStatus
       // changeStatus escribe internamente el statusHistory con el cambio de estado
       await this.vehiclesService.changeStatus(
         vehicleId,
-        VehicleStatus.DOCUMENTADO,
+        completionStatus,
         user,
         {
-          notes: `Documentación completada por ${user.displayName ?? user.email}${updatedFiles.length ? '. Archivos: ' + updatedFiles.join(', ') : ''}`,
+          notes: wasCertifiedEarly
+            ? `Documentación completada por ${user.displayName ?? user.email} — auto-avanzado a CERTIFICADO_STOCK (ya certificado físicamente, flag: ${vehicle['certifiedWhileEarlyState'] ? 'certifiedWhileEarlyState' : 'certifiedWhileNoFacturado'})${updatedFiles.length ? '. Archivos: ' + updatedFiles.join(', ') : ''}`
+            : `Documentación completada por ${user.displayName ?? user.email}${updatedFiles.length ? '. Archivos: ' + updatedFiles.join(', ') : ''}`,
           extraFields: {
             documentationDate: now,
             documentedBy: user.uid,
@@ -718,9 +745,9 @@ export class DocumentationService {
       ]);
 
       this.logger.log(
-        `Documentación COMPLETADA para vehículo ${vehicleId} por ${user.uid}`,
+        `Documentación COMPLETADA para vehículo ${vehicleId} por ${user.uid}${wasCertifiedEarly ? ' → auto-avanzado a CERTIFICADO_STOCK' : ''}`,
       );
-      return { vehicleId, updated: true, newStatus: VehicleStatus.DOCUMENTADO };
+      return { vehicleId, updated: true, newStatus: completionStatus };
     }
 
     // Actualización parcial sin cambio de estado — audit trail en statusHistory + notificación JEFE_TALLER
