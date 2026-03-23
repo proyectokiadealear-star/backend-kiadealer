@@ -199,6 +199,12 @@ export class ReportsService {
       if (!vid || !allowedVehicleIds.has(vid)) continue;
       // Apply sede filter if set
       if (filters?.sede && vehicleSedeMap[vid] !== filters.sede) continue;
+      // REQ-DATE-01: apply date range filter on doc.createdAt (fail-open: if null → include)
+      const docCreatedAt = this.toDate(doc['createdAt']);
+      if (docCreatedAt !== null) {
+        if (dateFromTs && docCreatedAt < dateFromTs) continue;
+        if (dateToTs   && docCreatedAt > dateToTs)   continue;
+      }
       const accs: any[] = doc['accessories'] ?? [];
       for (const acc of accs) {
         const key = acc['key'] ?? 'UNKNOWN';
@@ -282,28 +288,60 @@ export class ReportsService {
       .sort((a, b) => b.totalOTs - a.totalOTs)
       .slice(0, 10);
 
-    // REQ-BI-09: monthly delivery trend — last 12 months based on deliveryDate
-    const monthlyMap: Record<string, number> = {};
+    // REQ-DATE-03: dynamic monthly/daily pre-seeding based on selected date range
+    // Granularity: < 60 days → daily (YYYY-MM-DD); ≥ 60 days → monthly (YYYY-MM)
     const now = new Date();
-    // Pre-seed the last 12 calendar months so months with 0 deliveries appear too
-    for (let i = 11; i >= 0; i--) {
-      const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
-      const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
-      monthlyMap[key] = 0;
+    const rangeMs = (dateFromTs && dateToTs)
+      ? dateToTs.getTime() - dateFromTs.getTime()
+      : null;
+    const useDailyGranularity = rangeMs !== null && rangeMs < 60 * 86_400_000;
+    const monthlyMap: Record<string, number> = {};
+    const effectiveFrom = dateFromTs ?? new Date(now.getFullYear(), now.getMonth() - 11, 1);
+    const effectiveTo   = dateToTs   ?? now;
+
+    if (useDailyGranularity) {
+      const cur = new Date(effectiveFrom);
+      cur.setHours(0, 0, 0, 0);
+      while (cur <= effectiveTo) {
+        const key = `${cur.getFullYear()}-${String(cur.getMonth() + 1).padStart(2, '0')}-${String(cur.getDate()).padStart(2, '0')}`;
+        monthlyMap[key] = 0;
+        cur.setDate(cur.getDate() + 1);
+      }
+    } else {
+      const cur = new Date(effectiveFrom.getFullYear(), effectiveFrom.getMonth(), 1);
+      while (cur <= effectiveTo) {
+        const key = `${cur.getFullYear()}-${String(cur.getMonth() + 1).padStart(2, '0')}`;
+        monthlyMap[key] = 0;
+        cur.setMonth(cur.getMonth() + 1);
+      }
     }
+
     for (const v of filteredDeliveries) {
       const del = this.toDate(v['deliveryDate']);
       if (!del) continue;
-      const key = `${del.getFullYear()}-${String(del.getMonth() + 1).padStart(2, '0')}`;
+      const key = useDailyGranularity
+        ? `${del.getFullYear()}-${String(del.getMonth() + 1).padStart(2, '0')}-${String(del.getDate()).padStart(2, '0')}`
+        : `${del.getFullYear()}-${String(del.getMonth() + 1).padStart(2, '0')}`;
       if (key in monthlyMap) monthlyMap[key] = (monthlyMap[key] ?? 0) + 1;
     }
     const byMonthlyDeliveries = Object.entries(monthlyMap)
       .sort(([a], [b]) => a.localeCompare(b))
       .map(([month, count]) => ({ month, count }));
 
+    // REQ-DATE-02: count vehicles whose createdAt falls within the selected range
+    // fail-closed: if createdAt is null → do NOT count as "ingressed in period"
+    const vehiclesCreatedInPeriod = vehicles.filter((v) => {
+      const ca = this.toDate(v['createdAt']);
+      if (!ca) return false;
+      if (dateFromTs && ca < dateFromTs) return false;
+      if (dateToTs   && ca > dateToTs)   return false;
+      return true;
+    }).length;
+
     return {
       total: filtered.length,
       vehiclesDelivered: filteredDeliveries.length,
+      vehiclesCreatedInPeriod,
       byStatus,
       bySede,
       byModel,
