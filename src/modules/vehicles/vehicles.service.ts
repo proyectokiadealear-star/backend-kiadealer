@@ -104,6 +104,7 @@ export class VehiclesService {
       deliveredBy: null,
       createdAt: now,
       updatedAt: now,
+      statusChangedAt: now,
     };
 
     await this.db.collection('vehicles').doc(vehicleId).set(vehicleData);
@@ -211,7 +212,23 @@ export class VehiclesService {
       ref = ref.where('status', 'in', activeStatuses);
     }
 
+    // ── Parse date range filter ──────────────────────────────────────
+    let dateFromTs: number | null = null;
+    let dateToTs: number | null = null;
+
+    if (query.dateFrom) {
+      const d = new Date(query.dateFrom + 'T00:00:00');
+      if (!isNaN(d.getTime())) dateFromTs = Math.floor(d.getTime() / 1000);
+    }
+    if (query.dateTo) {
+      const d = new Date(query.dateTo + 'T23:59:59');
+      if (!isNaN(d.getTime())) dateToTs = Math.floor(d.getTime() / 1000);
+    }
+
+    const needsDateFilter = !!(dateFromTs || dateToTs);
     const needsTextFilter = !!(query.chassis || query.clientId);
+    // Date filter requires in-memory pass (Firestore 'in' + range = not supported)
+    const needsMemoryFilter = needsTextFilter || needsDateFilter;
     const page = query.page ?? 1;
     const limit = query.limit ?? 20;
     const start = (page - 1) * limit;
@@ -219,14 +236,15 @@ export class VehiclesService {
     let vehicles: FirebaseFirestore.DocumentData[];
     let total: number;
 
-    if (needsTextFilter) {
-      // Filtros de substring requieren traer todo y filtrar en memoria
+    if (needsMemoryFilter) {
+      // Filtros de substring o fecha requieren traer todo y filtrar en memoria
       const snapshot = await ref.get();
       vehicles = snapshot.docs
         .map((d) => d.data())
         .sort(
           (a, b) =>
-            (b['createdAt']?._seconds ?? 0) - (a['createdAt']?._seconds ?? 0),
+            (b['statusChangedAt']?._seconds ?? b['updatedAt']?._seconds ?? 0) -
+            (a['statusChangedAt']?._seconds ?? a['updatedAt']?._seconds ?? 0),
         );
 
       if (query.chassis) {
@@ -239,13 +257,27 @@ export class VehiclesService {
         vehicles = vehicles.filter((v) => v.clientId === query.clientId);
       }
 
+      // Apply date range on statusChangedAt (última acción real del pipeline)
+      if (dateFromTs || dateToTs) {
+        vehicles = vehicles.filter((v) => {
+          const ts =
+            v['statusChangedAt']?._seconds ??
+            v['updatedAt']?._seconds ??
+            0;
+          if (!ts) return false;
+          if (dateFromTs && ts < dateFromTs) return false;
+          if (dateToTs && ts > dateToTs) return false;
+          return true;
+        });
+      }
+
       total = vehicles.length;
       vehicles = vehicles.slice(start, start + limit);
     } else {
-      // Sin filtro de texto: paginación a nivel Firestore
-      // orderBy requiere índice compuesto — fallback a memoria si no existe
+      // Sin filtro de texto ni fecha: paginación a nivel Firestore
+      // Intentar orderBy statusChangedAt, fallback a memoria si índice no existe
       try {
-        const ordered = ref.orderBy('createdAt', 'desc');
+        const ordered = ref.orderBy('statusChangedAt', 'desc');
         const [countSnap, dataSnap] = await Promise.all([
           ordered.count().get(),
           ordered.offset(start).limit(limit).get(),
@@ -253,16 +285,17 @@ export class VehiclesService {
         total = countSnap.data().count;
         vehicles = dataSnap.docs.map((d) => d.data());
       } catch {
-        // Índice compuesto no existe — fallback
+        // Índice compuesto no existe o vehículos sin statusChangedAt — fallback
         this.logger.warn(
-          'findAll: orderBy+offset falló (índice compuesto faltante). Usando paginación en memoria.',
+          'findAll: orderBy statusChangedAt falló. Usando paginación en memoria.',
         );
         const snapshot = await ref.get();
         vehicles = snapshot.docs
           .map((d) => d.data())
           .sort(
             (a, b) =>
-              (b['createdAt']?._seconds ?? 0) - (a['createdAt']?._seconds ?? 0),
+              (b['statusChangedAt']?._seconds ?? b['updatedAt']?._seconds ?? 0) -
+              (a['statusChangedAt']?._seconds ?? a['updatedAt']?._seconds ?? 0),
           );
         total = vehicles.length;
         vehicles = vehicles.slice(start, start + limit);
@@ -541,9 +574,11 @@ export class VehiclesService {
     const vehicle = doc.data()!;
     const previousStatus = vehicle['status'] as VehicleStatus;
 
+    const now = this.firebase.serverTimestamp();
     const updates: Record<string, unknown> = {
       status: newStatus,
-      updatedAt: this.firebase.serverTimestamp(),
+      updatedAt: now,
+      statusChangedAt: now,
       ...(options?.extraFields ?? {}),
     };
 
@@ -1348,6 +1383,7 @@ export class VehiclesService {
             installedBy: null,
             deliveredBy: null,
             updatedAt: this.firebase.serverTimestamp(),
+            statusChangedAt: this.firebase.serverTimestamp(),
           });
 
         // Registrar en statusHistory
@@ -1402,6 +1438,7 @@ export class VehiclesService {
           clientId: esAnulacion ? null : (row.clientId ?? null),
           clientPhone: esAnulacion ? null : (row.clientPhone ?? null),
           updatedAt: this.firebase.serverTimestamp(),
+          statusChangedAt: this.firebase.serverTimestamp(),
         });
 
       // Registrar en statusHistory

@@ -44,4 +44,18 @@ export class QueryVehiclesDto {
   @Min(1)
   @Max(200)
   limit?: number = 20;
+
+  @ApiPropertyOptional({
+    description: 'Fecha inicio (ISO string, e.g. 2025-01-01)',
+  })
+  @IsOptional()
+  @IsString()
+  dateFrom?: string;
+
+  @ApiPropertyOptional({
+    description: 'Fecha fin (ISO string, e.g. 2025-12-31)',
+  })
+  @IsOptional()
+  @IsString()
+  dateTo?: string;
 }
