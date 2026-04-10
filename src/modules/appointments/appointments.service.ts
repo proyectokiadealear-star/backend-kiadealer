@@ -224,6 +224,10 @@ export class AppointmentsService {
 
     await this.db.collection('appointments').doc(aptId).update({
       ...Object.fromEntries(Object.entries(dto).filter(([, v]) => v !== undefined)),
+      // Reset reminder if date or time changed, so the cron sends a new one
+      ...(dto.scheduledDate !== undefined || dto.scheduledTime !== undefined
+        ? { reminderSentAt: null }
+        : {}),
       updatedAt: this.firebase.serverTimestamp(),
     });
 

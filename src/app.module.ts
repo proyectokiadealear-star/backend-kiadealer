@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
+import { ScheduleModule } from '@nestjs/schedule';
 import { FirebaseModule } from './firebase/firebase.module';
 import { VehiclesModule } from './modules/vehicles/vehicles.module';
 import { NotificationsModule } from './modules/notifications/notifications.module';
@@ -18,6 +19,7 @@ import { HomeModule } from './modules/home/home.module';
 @Module({
   imports: [
     ConfigModule.forRoot({ isGlobal: true }),
+    ScheduleModule.forRoot(),
     FirebaseModule,
     VehiclesModule,
     NotificationsModule,
