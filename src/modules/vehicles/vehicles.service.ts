@@ -275,7 +275,7 @@ export class VehiclesService {
       vehicles = vehicles.slice(start, start + limit);
     } else {
       // Sin filtro de texto ni fecha: paginación a nivel Firestore
-      // Intentar orderBy statusChangedAt, fallback a memoria si índice no existe
+      // Intentar orderBy statusChangedAt (requiere índice compuesto), fallback a updatedAt
       try {
         const ordered = ref.orderBy('statusChangedAt', 'desc');
         const [countSnap, dataSnap] = await Promise.all([
@@ -285,20 +285,30 @@ export class VehiclesService {
         total = countSnap.data().count;
         vehicles = dataSnap.docs.map((d) => d.data());
       } catch {
-        // Índice compuesto no existe o vehículos sin statusChangedAt — fallback
+        // Índice compuesto no existe — fallback ligero con updatedAt (campo siempre indexado)
         this.logger.warn(
-          'findAll: orderBy statusChangedAt falló. Usando paginación en memoria.',
+          'findAll: orderBy statusChangedAt falló. Fallback a updatedAt.',
         );
-        const snapshot = await ref.get();
-        vehicles = snapshot.docs
-          .map((d) => d.data())
-          .sort(
-            (a, b) =>
-              (b['statusChangedAt']?._seconds ?? b['updatedAt']?._seconds ?? 0) -
-              (a['statusChangedAt']?._seconds ?? a['updatedAt']?._seconds ?? 0),
+        try {
+          const fallback = ref.orderBy('updatedAt', 'desc');
+          const [countSnap, dataSnap] = await Promise.all([
+            fallback.count().get(),
+            fallback.offset(start).limit(limit).get(),
+          ]);
+          total = countSnap.data().count;
+          vehicles = dataSnap.docs.map((d) => d.data());
+        } catch {
+          // Último recurso: sin orderBy, solo count + limit en Firestore (no full-scan)
+          this.logger.warn(
+            'findAll: orderBy updatedAt también falló. Paginación sin orden.',
           );
-        total = vehicles.length;
-        vehicles = vehicles.slice(start, start + limit);
+          const [countSnap, dataSnap] = await Promise.all([
+            ref.count().get(),
+            ref.offset(start).limit(limit).get(),
+          ]);
+          total = countSnap.data().count;
+          vehicles = dataSnap.docs.map((d) => d.data());
+        }
       }
     }
 
