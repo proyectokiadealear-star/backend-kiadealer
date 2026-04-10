@@ -171,7 +171,7 @@ export class AppointmentsService {
     // ── Retrocompatibilidad: enriquecer docs legacy que les falten campos del vehículo ──
     // Aplica a docs que no tengan clientName O que no tengan color (campo añadido después).
     const missing = docs.filter(
-      (d) => (d['clientName'] === undefined || d['color'] === undefined) && d['vehicleId'],
+      (d) => (!d['clientName'] || !d['color']) && d['vehicleId'],
     );
     if (missing.length > 0) {
       const vehicleIds = [...new Set(missing.map((d) => d['vehicleId'] as string))];
@@ -182,17 +182,15 @@ export class AppointmentsService {
         vehicleSnaps.filter((s) => s.exists).map((s) => [s.id, s.data()]),
       );
       docs = docs.map((d) => {
-        const needsEnrich =
-          d['clientName'] === undefined || d['color'] === undefined;
-        if (!needsEnrich) return d;
+        if (d['clientName'] && d['color']) return d;
         const v = vehicleMap.get(d['vehicleId'] as string);
         if (!v) return d;
         return {
           ...d,
-          clientName: d['clientName'] !== undefined ? d['clientName'] : (v['clientName'] ?? null),
-          clientId:   d['clientId']   !== undefined ? d['clientId']   : (v['clientId']   ?? null),
-          color:      d['color']      !== undefined ? d['color']      : (v['color']      ?? null),
-          model:      d['model']      !== undefined ? d['model']      : (v['model']      ?? null),
+          clientName: d['clientName'] || (v['clientName'] ?? null),
+          clientId:   d['clientId']   || (v['clientId']   ?? null),
+          color:      d['color']      || (v['color']      ?? null),
+          model:      d['model']      || (v['model']      ?? null),
         };
       });
     }

@@ -8,8 +8,15 @@ async function bootstrap() {
   const app = await NestFactory.create(AppModule);
 
   // ── CORS ──────────────────────────────────────────────────────
+  // CORS_ORIGIN acepta múltiples orígenes separados por coma.
+  // Ej: "https://frontend-web-iota-vert.vercel.app,https://otro.com"
+  // Sin variable → solo permite localhost (desarrollo seguro).
+  const allowedOrigins = process.env.CORS_ORIGIN
+    ? process.env.CORS_ORIGIN.split(',').map((o) => o.trim())
+    : ['http://localhost:3000', 'http://localhost:3001', 'http://localhost:5173'];
+
   app.enableCors({
-    origin: process.env.CORS_ORIGIN ?? '*',
+    origin: allowedOrigins,
     methods: ['GET', 'POST', 'PATCH', 'DELETE', 'PUT', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization', 'Accept'],
     credentials: true,

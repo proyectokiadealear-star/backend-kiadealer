@@ -183,6 +183,7 @@ export class DocumentationService {
         documentationDate: isPending ? null : now,
         documentedBy: user.uid,
         clientId: dto.clientId,
+        clientName: dto.clientName,
       },
     });
 
