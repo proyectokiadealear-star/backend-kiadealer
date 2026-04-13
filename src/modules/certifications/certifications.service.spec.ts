@@ -70,10 +70,10 @@ describe('CertificationsService', () => {
 
   afterEach(() => jest.clearAllMocks());
 
-  it('should throw BadRequestException if vehicle is not in an allowed certification status', async () => {
+  it('should throw BadRequestException if vehicle has an unknown certification status', async () => {
     vehiclesService.assertExists = jest.fn().mockResolvedValue({
       id: 'v1',
-      status: VehicleStatus.DOCUMENTACION_PENDIENTE, // not in allowedStatuses, not post-cert
+      status: 'ESTADO_INVALIDO' as VehicleStatus,
       sede: SedeEnum.SURMOTOR,
     });
 
@@ -100,6 +100,46 @@ describe('CertificationsService', () => {
     await expect(service.create('v1', dto as any, asesorUser)).rejects.toThrow(
       BadRequestException,
     );
+  });
+
+  it('should certify vehicle in DOCUMENTACION_PENDIENTE without changing status', async () => {
+    vehiclesService.assertExists = jest.fn().mockResolvedValue({
+      id: 'v-doc-pending',
+      status: VehicleStatus.DOCUMENTACION_PENDIENTE,
+      sede: SedeEnum.SURMOTOR,
+      chassis: 'DOC123',
+    });
+    vehiclesService.addStatusHistory = jest.fn().mockResolvedValue(undefined);
+
+    const vehicleUpdateMock = jest.fn().mockResolvedValue(undefined);
+    const certSetMock = jest.fn().mockResolvedValue(undefined);
+
+    firebaseService.firestore = jest.fn().mockReturnValue({
+      collection: jest.fn().mockImplementation((col: string) => ({
+        doc: jest.fn().mockReturnValue({
+          get: jest.fn().mockResolvedValue({ exists: false, data: () => null }),
+          set: col === 'certifications' ? certSetMock : jest.fn(),
+          update: col === 'vehicles' ? vehicleUpdateMock : jest.fn(),
+        }),
+      })),
+    });
+
+    const dto = {
+      vehicleId: 'v-doc-pending',
+      radio: 'SI',
+      rimsStatus: 'ORIGINAL',
+      seatType: 'TELA',
+      antenna: 'ALETA_TIBURON',
+      trunkCover: 'SI',
+      mileage: 4,
+      imprints: 'CON_IMPRONTAS',
+    };
+
+    const result = await service.create('v-doc-pending', dto as any, asesorUser);
+
+    expect(result.newStatus).toBe(VehicleStatus.DOCUMENTACION_PENDIENTE);
+    expect(result).toHaveProperty('certifiedWhileEarlyState', true);
+    expect(vehiclesService.changeStatus).not.toHaveBeenCalled();
   });
 
   it('should send KILOMETRAJE_ALTO notification when mileage > 10', async () => {

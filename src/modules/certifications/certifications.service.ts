@@ -78,10 +78,11 @@ export class CertificationsService {
       VehicleStatus.NO_FACTURADO,
       VehicleStatus.POR_ARRIBAR,
       VehicleStatus.ENVIADO_A_MATRICULAR,
+      VehicleStatus.DOCUMENTACION_PENDIENTE,
     ];
     if (!isUpsert && !allowedStatuses.includes(currentStatus)) {
       throw new BadRequestException(
-        `El vehículo debe estar en estado DOCUMENTADO, NO_FACTURADO, POR_ARRIBAR o ENVIADO_A_MATRICULAR para certificar. Estado actual: ${currentStatus}`,
+        `El vehículo debe estar en estado POR_ARRIBAR, ENVIADO_A_MATRICULAR, DOCUMENTACION_PENDIENTE, DOCUMENTADO o NO_FACTURADO para certificar. Estado actual: ${currentStatus}`,
       );
     }
     const isNoFacturado =
@@ -90,6 +91,7 @@ export class CertificationsService {
     const earlyStatuses = [
       VehicleStatus.POR_ARRIBAR,
       VehicleStatus.ENVIADO_A_MATRICULAR,
+      VehicleStatus.DOCUMENTACION_PENDIENTE,
     ];
     const isEarlyState = !isUpsert && earlyStatuses.includes(currentStatus);
 
@@ -280,7 +282,7 @@ export class CertificationsService {
       };
     }
 
-    // ── Branch C: vehículo en POR_ARRIBAR o ENVIADO_A_MATRICULAR — NO cambiar status ──
+    // ── Branch C: vehículo en estado temprano (POR_ARRIBAR/ENVIADO_A_MATRICULAR/DOCUMENTACION_PENDIENTE) — NO cambiar status ──
     if (isEarlyState) {
       await this.db.collection('certifications').doc(vehicleId).set(certData);
 

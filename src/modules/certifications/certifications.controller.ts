@@ -44,7 +44,7 @@ export class CertificationsController {
       'Comportamiento según el estado del vehículo: ' +
       '(A) DOCUMENTADO sin cert previa → crea certificación y avanza a CERTIFICADO_STOCK (flujo normal). ' +
       '(B) NO_FACTURADO → certifica físicamente, estado NO cambia, flag certifiedWhileNoFacturado=true. ' +
-      '(C) POR_ARRIBAR o ENVIADO_A_MATRICULAR → certifica físicamente, estado NO cambia, flag certifiedWhileEarlyState=true; cuando el vehículo avance a DOCUMENTADO, se podrá generar OT directamente. ' +
+      '(C) POR_ARRIBAR, ENVIADO_A_MATRICULAR o DOCUMENTACION_PENDIENTE → certifica físicamente, estado NO cambia, flag certifiedWhileEarlyState=true; al completar documentación, podrá auto-avanzar a CERTIFICADO_STOCK. ' +
       '(Upsert) vehículo ya certificado o en estado post-certificación → actualiza campos sin cambiar estado. ' +
       'Sube foto del vehículo y foto de aros a Firebase Storage cuando se adjuntan. **Roles:** ASESOR, LIDER_TECNICO, PERSONAL_TALLER, JEFE_TALLER, SOPORTE',
   })

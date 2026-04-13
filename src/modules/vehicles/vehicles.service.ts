@@ -198,7 +198,11 @@ export class VehiclesService {
 
     if (query.sede) {
       ref = ref.where('sede', '==', query.sede);
-    } else if (user.role !== RoleEnum.JEFE_TALLER && user.role !== RoleEnum.SUPERVISOR) {
+    } else if (
+      user.role !== RoleEnum.JEFE_TALLER &&
+      user.role !== RoleEnum.SUPERVISOR &&
+      user.role !== RoleEnum.SOPORTE
+    ) {
       ref = ref.where('sede', '==', user.sede);
     }
 
@@ -276,10 +280,11 @@ export class VehiclesService {
     } else {
       // Sin filtro de texto ni fecha: paginación a nivel Firestore
       // Intentar orderBy statusChangedAt (requiere índice compuesto), fallback a updatedAt
+      const baseCountPromise = ref.count().get();
       try {
         const ordered = ref.orderBy('statusChangedAt', 'desc');
         const [countSnap, dataSnap] = await Promise.all([
-          ordered.count().get(),
+          baseCountPromise,
           ordered.offset(start).limit(limit).get(),
         ]);
         total = countSnap.data().count;
@@ -292,7 +297,7 @@ export class VehiclesService {
         try {
           const fallback = ref.orderBy('updatedAt', 'desc');
           const [countSnap, dataSnap] = await Promise.all([
-            fallback.count().get(),
+            baseCountPromise,
             fallback.offset(start).limit(limit).get(),
           ]);
           total = countSnap.data().count;
@@ -303,12 +308,22 @@ export class VehiclesService {
             'findAll: orderBy updatedAt también falló. Paginación sin orden.',
           );
           const [countSnap, dataSnap] = await Promise.all([
-            ref.count().get(),
+            baseCountPromise,
             ref.offset(start).limit(limit).get(),
           ]);
           total = countSnap.data().count;
           vehicles = dataSnap.docs.map((d) => d.data());
         }
+      }
+
+      // Si orderBy excluye docs sin el campo de orden, completar página sin orden.
+      const expectedPageSize = Math.max(Math.min(limit, total - start), 0);
+      if (expectedPageSize > 0 && vehicles.length < expectedPageSize) {
+        this.logger.debug(
+          'findAll: page incompleta por orderBy. Fallback a paginación sin orden.',
+        );
+        const dataSnap = await ref.offset(start).limit(limit).get();
+        vehicles = dataSnap.docs.map((d) => d.data());
       }
     }
 
