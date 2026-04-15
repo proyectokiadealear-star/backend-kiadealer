@@ -92,6 +92,11 @@ describe('ReportsService', () => {
     expect(analytics.total).toBe(0);
     expect(analytics.vehiclesDelivered).toBe(0);
     expect(analytics.vehiclesCreatedInPeriod).toBe(0);
+    expect(analytics.registrationBacklog).toEqual({
+      pendingReception: 0,
+      porArribar: 0,
+      pendingToRegister: 0,
+    });
     expect(analytics.avgDaysToDelivery).toBeNull();
     expect(analytics.medianDaysToDelivery).toBeNull();
     expect(analytics.otif).toEqual({
@@ -215,6 +220,11 @@ describe('ReportsService', () => {
     expect(analytics.total).toBe(3);
     expect(analytics.vehiclesDelivered).toBe(1);
     expect(analytics.vehiclesCreatedInPeriod).toBe(2);
+    expect(analytics.registrationBacklog).toEqual({
+      pendingReception: 0,
+      porArribar: 1,
+      pendingToRegister: 1,
+    });
     expect(analytics.accessories.totalVendido).toBe(1);
     expect(analytics.accessories.totalNoAplica).toBe(0);
     expect(analytics.topAsesores.ordenesGeneradas[0]).toMatchObject({
@@ -325,6 +335,67 @@ describe('ReportsService', () => {
       dateFrom: '01/02/2026',
       dateTo: '28/02/2026',
       groupBy: 'month',
+    });
+  });
+
+  it('builds pending registration backlog including POR_ARRIBAR and pending reception', async () => {
+    service = await buildService({
+      vehicles: [
+        {
+          id: 'v-por-arribar',
+          sede: 'SURMOTOR',
+          model: 'SPORTAGE',
+          color: 'BLANCO',
+          status: 'POR_ARRIBAR',
+          createdAt: '2026-02-10T00:00:00.000Z',
+        },
+        {
+          id: 'v-enviado-pendiente',
+          sede: 'SURMOTOR',
+          model: 'SPORTAGE',
+          color: 'NEGRO',
+          status: 'ENVIADO_A_MATRICULAR',
+          createdAt: '2026-02-10T00:00:00.000Z',
+        },
+        {
+          id: 'v-documentado-recibida',
+          sede: 'SURMOTOR',
+          model: 'SPORTAGE',
+          color: 'ROJO',
+          status: 'DOCUMENTADO',
+          registrationReceivedDate: '2026-02-15',
+          createdAt: '2026-02-10T00:00:00.000Z',
+        },
+        {
+          id: 'v-certificado-pendiente',
+          sede: 'SURMOTOR',
+          model: 'SPORTAGE',
+          color: 'AZUL',
+          status: 'CERTIFICADO_STOCK',
+          registrationReceivedDate: '   ',
+          createdAt: '2026-02-10T00:00:00.000Z',
+        },
+        {
+          id: 'v-otro-modelo',
+          sede: 'SURMOTOR',
+          model: 'RIO',
+          color: 'PLATA',
+          status: 'ENVIADO_A_MATRICULAR',
+          createdAt: '2026-02-10T00:00:00.000Z',
+        },
+      ],
+    });
+
+    const analytics = await service.getAnalytics(user, {
+      model: 'KIA SPORTAGE',
+      dateFrom: '01/01/2026',
+      dateTo: '31/12/2026',
+    });
+
+    expect(analytics.registrationBacklog).toEqual({
+      pendingReception: 2,
+      porArribar: 1,
+      pendingToRegister: 3,
     });
   });
 

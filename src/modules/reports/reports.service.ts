@@ -264,6 +264,60 @@ export class ReportsService {
     };
   }
 
+  private requiresRegistrationReception(status: unknown): boolean {
+    return [
+      'ENVIADO_A_MATRICULAR',
+      'DOCUMENTACION_PENDIENTE',
+      'DOCUMENTADO',
+      'CERTIFICADO_STOCK',
+      'ORDEN_GENERADA',
+      'ASIGNADO',
+      'EN_INSTALACION',
+      'INSTALACION_COMPLETA',
+      'LISTO_PARA_ENTREGA',
+    ].includes(String(status ?? ''));
+  }
+
+  private hasRegistrationReceptionPending(vehicle: any): boolean {
+    const status = vehicle?.['status'];
+    if (!this.requiresRegistrationReception(status)) {
+      return false;
+    }
+
+    const registrationReceivedDate = vehicle?.['registrationReceivedDate'];
+    if (typeof registrationReceivedDate !== 'string') {
+      return true;
+    }
+
+    return registrationReceivedDate.trim() === '';
+  }
+
+  private buildRegistrationBacklog(filteredVehicles: any[]): {
+    pendingReception: number;
+    porArribar: number;
+    pendingToRegister: number;
+  } {
+    let pendingReception = 0;
+    let porArribar = 0;
+
+    for (const vehicle of filteredVehicles) {
+      const status = vehicle?.['status'];
+      if (status === 'POR_ARRIBAR') {
+        porArribar += 1;
+      }
+
+      if (this.hasRegistrationReceptionPending(vehicle)) {
+        pendingReception += 1;
+      }
+    }
+
+    return {
+      pendingReception,
+      porArribar,
+      pendingToRegister: pendingReception + porArribar,
+    };
+  }
+
   private parseDayBound(value: string, endOfDay: boolean): Date {
     const parts = value.split('/');
     if (parts.length !== 3) {
@@ -707,6 +761,8 @@ export class ReportsService {
       return true;
     }).length;
 
+    const registrationBacklog = this.buildRegistrationBacklog(filtered);
+
     const otif = this.computeOtif(
       filteredDeliveries,
       allAppointments.filter((apt) => {
@@ -721,6 +777,7 @@ export class ReportsService {
       total: filtered.length,
       vehiclesDelivered: filteredDeliveries.length,
       vehiclesCreatedInPeriod,
+      registrationBacklog,
       byStatus,
       bySede,
       byModel,

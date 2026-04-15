@@ -28,6 +28,11 @@ export interface AnalyticsResponseContract {
   total: number;
   vehiclesDelivered: number;
   vehiclesCreatedInPeriod: number;
+  registrationBacklog: {
+    pendingReception: number;
+    porArribar: number;
+    pendingToRegister: number;
+  };
   byStatus: Record<string, number>;
   bySede: Record<string, number>;
   byModel: Record<string, number>;
