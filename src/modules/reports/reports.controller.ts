@@ -8,6 +8,7 @@ import { Roles } from '../../common/decorators/roles.decorator';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { RoleEnum } from '../../common/enums/role.enum';
 import type { AuthenticatedUser } from '../../common/interfaces/authenticated-user.interface';
+import { AnalyticsFiltersDto } from './dto/analytics-filters.dto';
 
 @ApiTags('Reports')
 @ApiBearerAuth()
@@ -38,12 +39,9 @@ export class ReportsController {
   @Roles(RoleEnum.JEFE_TALLER, RoleEnum.SOPORTE, RoleEnum.SUPERVISOR)
   getAnalytics(
     @CurrentUser() user: AuthenticatedUser,
-    @Query('sede') sede?: string,
-    @Query('model') model?: string,
-    @Query('dateFrom') dateFrom?: string,
-    @Query('dateTo') dateTo?: string,
+    @Query() filters: AnalyticsFiltersDto,
   ) {
-    return this.svc.getAnalytics(user, { sede, model, dateFrom, dateTo });
+    return this.svc.getAnalytics(user, filters);
   }
 
   @Get('technician-performance/:uid')

@@ -272,6 +272,11 @@ export class VehiclesController {
   })
   @ApiQuery({ name: 'page', required: false, type: Number, example: 1, description: 'Página (default 1)' })
   @ApiQuery({ name: 'limit', required: false, type: Number, example: 100, description: 'Ítems por página (default 100, máx 500)' })
+  @ApiQuery({ name: 'sede', required: false, type: String, description: 'Filtrar por sede' })
+  @ApiQuery({ name: 'model', required: false, type: String, description: 'Filtrar por modelo (normaliza KIA prefix)' })
+  @ApiQuery({ name: 'status', required: false, type: String, description: 'Estado o lista CSV de estados del pipeline call center' })
+  @ApiQuery({ name: 'dateFrom', required: false, type: String, description: 'Fecha inicial yyyy-MM-dd para el período del call center' })
+  @ApiQuery({ name: 'dateTo', required: false, type: String, description: 'Fecha final yyyy-MM-dd para el período del call center' })
   @ApiResponse({
     status: 200,
     description: 'PaginatedResponse<CallCenterVehicle>',
@@ -281,10 +286,21 @@ export class VehiclesController {
   getCallCenterList(
     @Query('page') page?: string,
     @Query('limit') limit?: string,
+    @Query('sede') sede?: string,
+    @Query('model') model?: string,
+    @Query('status') status?: string,
+    @Query('dateFrom') dateFrom?: string,
+    @Query('dateTo') dateTo?: string,
   ) {
     const parsedPage = page ? Math.max(1, Number(page)) : 1;
     const parsedLimit = limit ? Math.min(Number(limit), 500) : 100;
-    return this.svc.getCallCenterList(parsedPage, parsedLimit);
+    return this.svc.getCallCenterList(parsedPage, parsedLimit, {
+      sede: sede || undefined,
+      model: model || undefined,
+      status: status || undefined,
+      dateFrom: dateFrom || undefined,
+      dateTo: dateTo || undefined,
+    });
   }
 
   // ── SALE POTENTIAL ──────────────────────────────────────────────

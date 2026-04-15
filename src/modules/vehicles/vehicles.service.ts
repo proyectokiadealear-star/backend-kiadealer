@@ -669,6 +669,46 @@ export class VehiclesService {
     return doc.data()!;
   }
 
+  private parseIsoDay(value?: string): Date | null {
+    if (!value || typeof value !== 'string') return null;
+    const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value.trim());
+    if (!match) return null;
+    const date = new Date(`${match[1]}-${match[2]}-${match[3]}T00:00:00.000Z`);
+    return Number.isNaN(date.getTime()) ? null : date;
+  }
+
+  private normalizeCallCenterModel(model?: string): string | null {
+    if (!model) return null;
+    const normalized = model.trim().replace(/^KIA\s+/i, '').toUpperCase();
+    return normalized || null;
+  }
+
+  private toDate(field: any): Date | null {
+    if (!field) return null;
+    if (typeof field === 'string') {
+      const d = new Date(field);
+      return Number.isNaN(d.getTime()) ? null : d;
+    }
+    const secs = field._seconds ?? field.seconds;
+    if (typeof secs === 'number') return new Date(secs * 1000);
+    if (typeof field.toDate === 'function') return field.toDate();
+    return null;
+  }
+
+  private normalizeAccessoryClassification(
+    value: unknown,
+  ): AccessoryClassification | null {
+    if (typeof value !== 'string') return null;
+    const normalized = value.trim().toUpperCase();
+    if (normalized === AccessoryClassification.VENDIDO)
+      return AccessoryClassification.VENDIDO;
+    if (normalized === AccessoryClassification.OBSEQUIADO)
+      return AccessoryClassification.OBSEQUIADO;
+    if (normalized === AccessoryClassification.NO_APLICA)
+      return AccessoryClassification.NO_APLICA;
+    return null;
+  }
+
   // ──────────────────────────────────────────────────────────────────
   // CALL CENTER — lista de ENTREGADO con accesorios (seguro + telemetría)
   // ──────────────────────────────────────────────────────────────────
@@ -677,7 +717,17 @@ export class VehiclesService {
    * accesorios de seguro y telemetría.  Usa Firestore getAll() para el
    * batch-join de documentations — single round-trip, O(1) request.
    */
-  async getCallCenterList(page = 1, limit = 100) {
+  async getCallCenterList(
+    page = 1,
+    limit = 100,
+    filters?: {
+      sede?: string;
+      model?: string;
+      status?: string;
+      dateFrom?: string;
+      dateTo?: string;
+    },
+  ) {
     // 1. Traer vehículos desde DOCUMENTADO hasta ENTREGADO (ya tienen documentación con propietario y accesorios)
     const CALL_CENTER_STATUSES = [
       VehicleStatus.DOCUMENTADO,
@@ -701,7 +751,51 @@ export class VehiclesService {
       return { data: [], total: 0, page, limit, totalPages: 0 };
     }
 
-    const allVehicles = allSnap.docs.map((d) => d.data());
+    const statusSet = filters?.status
+      ? new Set(
+          filters.status
+            .split(',')
+            .map((s) => s.trim().toUpperCase())
+            .filter(Boolean),
+        )
+      : null;
+    const modelNormalized = this.normalizeCallCenterModel(filters?.model);
+    const dateFrom = this.parseIsoDay(filters?.dateFrom);
+    const dateTo = this.parseIsoDay(filters?.dateTo);
+    if (dateTo) {
+      dateTo.setUTCHours(23, 59, 59, 999);
+    }
+
+    const allVehicles = allSnap.docs
+      .map((d) => ({ id: d.id, ...d.data() }))
+      .filter((vehicle) => {
+        if (filters?.sede && vehicle['sede'] !== filters.sede) return false;
+
+        if (statusSet && !statusSet.has(String(vehicle['status'] ?? '').toUpperCase())) {
+          return false;
+        }
+
+        if (modelNormalized) {
+          const currentModel = this.normalizeCallCenterModel(
+            vehicle['model'] as string | undefined,
+          );
+          if (currentModel !== modelNormalized) return false;
+        }
+
+        if (dateFrom || dateTo) {
+          const referenceDate =
+            this.toDate(vehicle['deliveryDate']) ??
+            this.toDate(vehicle['statusChangedAt']) ??
+            this.toDate(vehicle['updatedAt']) ??
+            this.toDate(vehicle['createdAt']);
+          if (!referenceDate) return false;
+          if (dateFrom && referenceDate < dateFrom) return false;
+          if (dateTo && referenceDate > dateTo) return false;
+        }
+
+        return true;
+      });
+
     const total = allVehicles.length;
     const totalPages = Math.ceil(total / limit);
     const safePage = Math.max(1, Math.min(page, totalPages));
@@ -726,22 +820,46 @@ export class VehiclesService {
       string,
       { nombre: string; cedula: string; telefono: string }
     >();
-    docSnaps.forEach((snap) => {
-      if (!snap.exists) return;
-      const data = snap.data()!;
+    const registerDocumentation = (vehicleId: string, data: any) => {
+      if (!vehicleId) return;
+      if (accMap.has(vehicleId) && clientMap.has(vehicleId)) return;
       const raw = data['accessories'];
       accMap.set(
-        snap.id,
+        vehicleId,
         Array.isArray(raw)
           ? (raw as Array<{ key: string; classification: string | null }>)
           : [],
       );
-      clientMap.set(snap.id, {
+      clientMap.set(vehicleId, {
         nombre: (data['clientName'] as string) ?? '',
         cedula: (data['clientId'] as string) ?? '',
         telefono: (data['clientPhone'] as string) ?? '',
       });
+    };
+
+    const missingVehicleIds: string[] = [];
+    docSnaps.forEach((snap) => {
+      if (!snap.exists) {
+        missingVehicleIds.push(snap.id);
+        return;
+      }
+      registerDocumentation(snap.id, snap.data()!);
     });
+
+    if (missingVehicleIds.length > 0) {
+      for (let i = 0; i < missingVehicleIds.length; i += 10) {
+        const chunk = missingVehicleIds.slice(i, i + 10);
+        const byVehicleIdSnap = await this.db
+          .collection('documentations')
+          .where('vehicleId', 'in', chunk)
+          .get();
+        byVehicleIdSnap.docs.forEach((doc) => {
+          const data = doc.data();
+          const vehicleId = (data['vehicleId'] as string) ?? '';
+          registerDocumentation(vehicleId, data);
+        });
+      }
+    }
 
     // 4. Merge y construir DTO liviano
     const data = vehicles.map((v) => {
@@ -761,7 +879,9 @@ export class VehiclesService {
             a.key === key.toUpperCase() ||
             a.key.toLowerCase() === key.toLowerCase(),
         );
-        const classification = acc?.classification ?? null;
+        const classification = this.normalizeAccessoryClassification(
+          acc?.classification,
+        );
         const vendido =
           classification === AccessoryClassification.VENDIDO ||
           classification === AccessoryClassification.OBSEQUIADO;
@@ -777,15 +897,22 @@ export class VehiclesService {
       // Prefiere datos de documentación (fuente de verdad);
       // usa campos del vehículo solo como fallback (p.ej. clientId denormalizado)
       const client = clientMap.get(id);
-      return {
-        id,
+        return {
+          id,
         chasis: v['chassis'] as string,
         modelo: v['model'] as string,
         color: v['color'] as string,
         año: v['year'] as number,
         sede: v['sede'] as string,
         status: v['status'] as string,
-        propietario: {
+          referenceDate:
+            this.toDate(v['deliveryDate'])?.toISOString() ??
+            this.toDate(v['statusChangedAt'])?.toISOString() ??
+            this.toDate(v['updatedAt'])?.toISOString() ??
+            this.toDate(v['createdAt'])?.toISOString() ??
+            null,
+          documentationFound: clientMap.has(id),
+          propietario: {
           nombre: client?.nombre ?? (v['clientName'] as string) ?? '',
           cedula: client?.cedula ?? (v['clientId'] as string) ?? '',
           telefono: client?.telefono ?? (v['clientPhone'] as string) ?? '',
