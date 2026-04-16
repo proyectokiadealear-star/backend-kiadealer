@@ -30,20 +30,31 @@ export class QueryVehiclesDto {
   @IsString()
   clientId?: string;
 
-  @ApiPropertyOptional({ default: 1 })
+  @ApiPropertyOptional({
+    default: 1,
+    description: 'Página solo retrocompatible. page>1 requiere cursor.',
+  })
   @IsOptional()
   @Type(() => Number)
   @IsNumber()
   @Min(1)
   page?: number = 1;
 
-  @ApiPropertyOptional({ default: 20 })
+  @ApiPropertyOptional({ default: 200 })
   @IsOptional()
   @Type(() => Number)
   @IsNumber()
   @Min(1)
   @Max(200)
-  limit?: number = 20;
+  limit?: number = 200;
+
+  @ApiPropertyOptional({
+    description:
+      'Cursor de paginacion (base64). Cursor-first con startAfter y orden estable; usar nextCursor de la respuesta.',
+  })
+  @IsOptional()
+  @IsString()
+  cursor?: string;
 
   @ApiPropertyOptional({
     description: 'Fecha inicio (ISO string, e.g. 2025-01-01)',

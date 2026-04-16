@@ -2,7 +2,11 @@ import { Injectable, BadRequestException, ConflictException, NotFoundException, 
 import { FirebaseService } from '../../firebase/firebase.service';
 import { VehiclesService } from '../vehicles/vehicles.service';
 import { NotificationsService } from '../notifications/notifications.service';
-import { CreateAppointmentDto, UpdateAppointmentDto } from './dto/appointment.dto';
+import {
+  CreateAppointmentDto,
+  QueryAppointmentsDto,
+  UpdateAppointmentDto,
+} from './dto/appointment.dto';
 import { VehicleStatus } from '../../common/enums/vehicle-status.enum';
 import { RoleEnum } from '../../common/enums/role.enum';
 import { AuthenticatedUser } from '../../common/interfaces/authenticated-user.interface';
@@ -139,8 +143,11 @@ export class AppointmentsService {
       .map((d) => d['scheduledTime'] as string);
   }
 
-  async findAll(user: AuthenticatedUser, dateFrom?: string, dateTo?: string, vehicleId?: string) {
+  async findAll(user: AuthenticatedUser, filters: QueryAppointmentsDto) {
     let query: FirebaseFirestore.Query = this.db.collection('appointments');
+    const dateFrom = filters.dateFrom;
+    const dateTo = filters.dateTo;
+    const vehicleId = filters.vehicleId;
 
     // Si se filtra por vehicleId específico, omitir restricciones de rol/sede
     // para que el asesor que ejecuta la ceremonia pueda encontrar la cita aunque
@@ -159,14 +166,83 @@ export class AppointmentsService {
       query = query.where('sede', '==', user.sede);
     }
 
-    // Sin orderBy en Firestore para evitar índices compuestos — ordenar en memoria
-    const snapshot = await query.get();
-    let docs = snapshot.docs
-      .map((d) => d.data())
-      .sort((a, b) => String(a['scheduledDate'] ?? '').localeCompare(String(b['scheduledDate'] ?? '')));
+    if (dateFrom) query = query.where('scheduledDate', '>=', dateFrom);
+    if (dateTo) query = query.where('scheduledDate', '<=', dateTo);
 
-    if (dateFrom) docs = docs.filter((d) => d['scheduledDate'] >= dateFrom);
-    if (dateTo) docs = docs.filter((d) => d['scheduledDate'] <= dateTo);
+    const pageRaw = filters.page ? Number(filters.page) : 1;
+    const page = Number.isFinite(pageRaw) ? Math.max(1, pageRaw) : 1;
+    const limitRaw = filters.limit ? Number(filters.limit) : undefined;
+    const limit = Math.min(Math.max(limitRaw ?? 50, 1), 200);
+    const cursorRaw = filters.cursor;
+    const usePagination = !!(filters.page || filters.limit || filters.cursor);
+
+    if (page > 1 && !cursorRaw) {
+      throw new BadRequestException(
+        'La paginación por page>1 está obsoleta en appointments. Use cursor (nextCursor) para continuar.',
+      );
+    }
+
+    let cursorScheduledDate: string | null = null;
+    let cursorScheduledTime: string | null = null;
+    let cursorDocId: string | null = null;
+    if (cursorRaw) {
+      try {
+        const parsed = JSON.parse(
+          Buffer.from(cursorRaw, 'base64').toString('utf8'),
+        ) as {
+          scheduledDate?: string;
+          scheduledTime?: string;
+          id?: string;
+        };
+        if (
+          typeof parsed.scheduledDate === 'string' &&
+          typeof parsed.scheduledTime === 'string' &&
+          typeof parsed.id === 'string' &&
+          parsed.id.trim().length > 0
+        ) {
+          cursorScheduledDate = parsed.scheduledDate;
+          cursorScheduledTime = parsed.scheduledTime;
+          cursorDocId = parsed.id;
+        } else {
+          throw new Error('cursor invalid structure');
+        }
+      } catch {
+        throw new BadRequestException('Cursor inválido para appointments');
+      }
+    }
+
+    // Q6: orden estable para paginación
+    let ordered = query
+      .orderBy('scheduledDate', 'asc')
+      .orderBy('scheduledTime', 'asc')
+      .orderBy('__name__', 'asc');
+
+    if (cursorScheduledDate && cursorScheduledTime && cursorDocId) {
+      ordered = ordered.startAfter(
+        cursorScheduledDate,
+        cursorScheduledTime,
+        cursorDocId,
+      );
+    }
+
+    let total = 0;
+    let pageDocs: FirebaseFirestore.QueryDocumentSnapshot[] = [];
+    let hasMore = false;
+    if (usePagination) {
+      const [countSnap, snapshot] = await Promise.all([
+        query.count().get(),
+        ordered.limit(limit + 1).get(),
+      ]);
+      total = countSnap.data().count;
+      hasMore = snapshot.docs.length > limit;
+      pageDocs = snapshot.docs.slice(0, limit);
+    } else {
+      const snapshot = await ordered.get();
+      pageDocs = snapshot.docs;
+      total = pageDocs.length;
+    }
+
+    let docs = pageDocs.map((d) => d.data());
 
     // ── Retrocompatibilidad: enriquecer docs legacy que les falten campos del vehículo ──
     // Aplica a docs que no tengan clientName O que no tengan color (campo añadido después).
@@ -196,7 +272,30 @@ export class AppointmentsService {
     }
     // ─────────────────────────────────────────────────────────────────────────────────
 
-    return docs;
+    if (!usePagination) {
+      return docs;
+    }
+
+    let nextCursor: string | null = null;
+    const lastDoc = pageDocs.at(-1);
+    if (lastDoc && usePagination && pageDocs.length === limit && hasMore) {
+      nextCursor = Buffer.from(
+        JSON.stringify({
+          scheduledDate: lastDoc.get('scheduledDate') as string,
+          scheduledTime: lastDoc.get('scheduledTime') as string,
+          id: lastDoc.id,
+        }),
+        'utf8',
+      ).toString('base64');
+    }
+
+    return {
+      data: docs,
+      total,
+      page: cursorRaw ? 1 : page,
+      limit,
+      ...(nextCursor ? { nextCursor } : {}),
+    };
   }
 
   async update(aptId: string, dto: UpdateAppointmentDto, user: AuthenticatedUser) {

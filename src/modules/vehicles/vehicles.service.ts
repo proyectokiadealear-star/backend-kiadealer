@@ -234,21 +234,70 @@ export class VehiclesService {
     // Date filter requires in-memory pass (Firestore 'in' + range = not supported)
     const needsMemoryFilter = needsTextFilter || needsDateFilter;
     const page = query.page ?? 1;
-    const limit = query.limit ?? 20;
-    const start = (page - 1) * limit;
+    const limit = Math.min(query.limit ?? 200, 200);
+    const cursorRaw = query.cursor;
 
-    let vehicles: FirebaseFirestore.DocumentData[];
+    if (page > 1 && !cursorRaw) {
+      throw new BadRequestException(
+        'La paginación por page>1 está obsoleta en vehicles. Use cursor (nextCursor) para continuar.',
+      );
+    }
+
+    let cursorSortSeconds: number | null = null;
+    let cursorDocId: string | null = null;
+    if (cursorRaw) {
+      try {
+        const parsed = JSON.parse(
+          Buffer.from(cursorRaw, 'base64').toString('utf8'),
+        ) as {
+          statusChangedAtSeconds?: number;
+          cursorSeconds?: number;
+          docId?: string;
+        };
+        const parsedSeconds =
+          typeof parsed.cursorSeconds === 'number'
+            ? parsed.cursorSeconds
+            : parsed.statusChangedAtSeconds;
+        if (
+          typeof parsedSeconds === 'number' &&
+          typeof parsed.docId === 'string' &&
+          parsed.docId.trim().length > 0
+        ) {
+          cursorSortSeconds = parsedSeconds;
+          cursorDocId = parsed.docId;
+        } else {
+          throw new Error('cursor structure invalid');
+        }
+      } catch {
+        throw new BadRequestException('Cursor inválido para vehicles');
+      }
+    }
+
+    let vehicles: Array<
+      FirebaseFirestore.DocumentData & {
+        __docId: string;
+        __cursorSeconds: number;
+      }
+    >;
     let total: number;
+    let nextCursor: string | null = null;
 
     if (needsMemoryFilter) {
       // Filtros de substring o fecha requieren traer todo y filtrar en memoria
       const snapshot = await ref.get();
       vehicles = snapshot.docs
-        .map((d) => d.data())
+        .map((d) => ({
+          ...d.data(),
+          __docId: d.id,
+          __cursorSeconds:
+            (d.get('statusChangedAt')?._seconds as number | undefined) ??
+            (d.get('updatedAt')?._seconds as number | undefined) ??
+            0,
+        }))
         .sort(
           (a, b) =>
-            (b['statusChangedAt']?._seconds ?? b['updatedAt']?._seconds ?? 0) -
-            (a['statusChangedAt']?._seconds ?? a['updatedAt']?._seconds ?? 0),
+            b.__cursorSeconds - a.__cursorSeconds ||
+            b.__docId.localeCompare(a.__docId),
         );
 
       if (query.chassis) {
@@ -275,64 +324,171 @@ export class VehiclesService {
         });
       }
 
-      total = vehicles.length;
-      vehicles = vehicles.slice(start, start + limit);
+      const fullTotal = vehicles.length;
+
+      if (cursorSortSeconds !== null && cursorDocId) {
+        vehicles = vehicles.filter(
+          (v) =>
+            v.__cursorSeconds < cursorSortSeconds ||
+            (v.__cursorSeconds === cursorSortSeconds &&
+              v.__docId.localeCompare(cursorDocId) < 0),
+        );
+      }
+
+      total = fullTotal;
+      const pageDocs = vehicles.slice(0, limit + 1);
+      const hasMore = pageDocs.length > limit;
+      vehicles = pageDocs.slice(0, limit);
+      if (hasMore && vehicles.length > 0) {
+        const last = vehicles[vehicles.length - 1];
+        nextCursor = Buffer.from(
+          JSON.stringify({
+            statusChangedAtSeconds: last.__cursorSeconds,
+            cursorSeconds: last.__cursorSeconds,
+            docId: last.__docId,
+          }),
+          'utf8',
+        ).toString('base64');
+      }
     } else {
       // Sin filtro de texto ni fecha: paginación a nivel Firestore
-      // Intentar orderBy statusChangedAt (requiere índice compuesto), fallback a updatedAt
+      // Q3 optimizado: where(status in) + orderBy(statusChangedAt desc) + orderBy(__name__ desc)
       const baseCountPromise = ref.count().get();
       try {
-        const ordered = ref.orderBy('statusChangedAt', 'desc');
+        let ordered = ref
+          .orderBy('statusChangedAt', 'desc')
+          .orderBy('__name__', 'desc');
+        if (cursorSortSeconds !== null && cursorDocId) {
+          ordered = ordered.startAfter(
+            new Date(cursorSortSeconds * 1000),
+            cursorDocId,
+          );
+        }
         const [countSnap, dataSnap] = await Promise.all([
           baseCountPromise,
-          ordered.offset(start).limit(limit).get(),
+          ordered.limit(limit + 1).get(),
         ]);
         total = countSnap.data().count;
-        vehicles = dataSnap.docs.map((d) => d.data());
+        const hasMore = dataSnap.docs.length > limit;
+        const pageDocs = dataSnap.docs.slice(0, limit);
+        vehicles = pageDocs.map((d) => ({
+          ...d.data(),
+          __docId: d.id,
+          __cursorSeconds:
+            (d.get('statusChangedAt')?._seconds as number | undefined) ?? 0,
+        }));
+        const last = vehicles.at(-1);
+        if (last && hasMore) {
+          nextCursor = Buffer.from(
+            JSON.stringify({
+              statusChangedAtSeconds: last.__cursorSeconds,
+              cursorSeconds: last.__cursorSeconds,
+              docId: last.__docId,
+            }),
+            'utf8',
+          ).toString('base64');
+        }
       } catch {
-        // Índice compuesto no existe — fallback ligero con updatedAt (campo siempre indexado)
+        // Índice compuesto no existe — fallback ligero con updatedAt + __name__
         this.logger.warn(
           'findAll: orderBy statusChangedAt falló. Fallback a updatedAt.',
         );
         try {
-          const fallback = ref.orderBy('updatedAt', 'desc');
+          let fallback = ref.orderBy('updatedAt', 'desc').orderBy('__name__', 'desc');
+          if (cursorSortSeconds !== null && cursorDocId) {
+            fallback = fallback.startAfter(
+              new Date(cursorSortSeconds * 1000),
+              cursorDocId,
+            );
+          }
           const [countSnap, dataSnap] = await Promise.all([
             baseCountPromise,
-            fallback.offset(start).limit(limit).get(),
+            fallback.limit(limit + 1).get(),
           ]);
           total = countSnap.data().count;
-          vehicles = dataSnap.docs.map((d) => d.data());
+          const hasMore = dataSnap.docs.length > limit;
+          const pageDocs = dataSnap.docs.slice(0, limit);
+          vehicles = pageDocs.map((d) => ({
+            ...d.data(),
+            __docId: d.id,
+            __cursorSeconds:
+              (d.get('updatedAt')?._seconds as number | undefined) ?? 0,
+          }));
+          const last = vehicles.at(-1);
+          if (last && hasMore) {
+            nextCursor = Buffer.from(
+              JSON.stringify({
+                statusChangedAtSeconds: last.__cursorSeconds,
+                cursorSeconds: last.__cursorSeconds,
+                docId: last.__docId,
+              }),
+              'utf8',
+            ).toString('base64');
+          }
         } catch {
-          // Último recurso: sin orderBy, solo count + limit en Firestore (no full-scan)
+          // Último recurso: sin índices de orderBy, resolver en memoria con cursor estable.
           this.logger.warn(
-            'findAll: orderBy updatedAt también falló. Paginación sin orden.',
+            'findAll: orderBy updatedAt también falló. Fallback en memoria.',
           );
-          const [countSnap, dataSnap] = await Promise.all([
-            baseCountPromise,
-            ref.offset(start).limit(limit).get(),
-          ]);
-          total = countSnap.data().count;
-          vehicles = dataSnap.docs.map((d) => d.data());
-        }
-      }
+          const dataSnap = await ref.get();
+          let fallbackRows = dataSnap.docs
+            .map((d) => ({
+              ...d.data(),
+              __docId: d.id,
+              __cursorSeconds:
+                (d.get('statusChangedAt')?._seconds as number | undefined) ??
+                (d.get('updatedAt')?._seconds as number | undefined) ??
+                0,
+            }))
+            .sort(
+              (a, b) =>
+                b.__cursorSeconds - a.__cursorSeconds ||
+                b.__docId.localeCompare(a.__docId),
+            );
 
-      // Si orderBy excluye docs sin el campo de orden, completar página sin orden.
-      const expectedPageSize = Math.max(Math.min(limit, total - start), 0);
-      if (expectedPageSize > 0 && vehicles.length < expectedPageSize) {
-        this.logger.debug(
-          'findAll: page incompleta por orderBy. Fallback a paginación sin orden.',
-        );
-        const dataSnap = await ref.offset(start).limit(limit).get();
-        vehicles = dataSnap.docs.map((d) => d.data());
+          if (cursorSortSeconds !== null && cursorDocId) {
+            fallbackRows = fallbackRows.filter(
+              (v) =>
+                v.__cursorSeconds < cursorSortSeconds ||
+                (v.__cursorSeconds === cursorSortSeconds &&
+                  v.__docId.localeCompare(cursorDocId) < 0),
+            );
+          }
+
+          total = fallbackRows.length;
+          const pageDocs = fallbackRows.slice(0, limit + 1);
+          const hasMore = pageDocs.length > limit;
+          vehicles = pageDocs.slice(0, limit);
+          const last = vehicles.at(-1);
+          if (last && hasMore) {
+            nextCursor = Buffer.from(
+              JSON.stringify({
+                statusChangedAtSeconds: last.__cursorSeconds,
+                cursorSeconds: last.__cursorSeconds,
+                docId: last.__docId,
+              }),
+              'utf8',
+            ).toString('base64');
+          }
+        }
       }
     }
 
     // Resolver URLs de fotos (usa caché, no regenera en cada request)
     const data = await Promise.all(
-      vehicles.map((v) => this.resolvePhotoUrl(v as Record<string, unknown>)),
+      vehicles.map((v) => {
+        const { __docId, __cursorSeconds, ...vehicle } = v;
+        return this.resolvePhotoUrl(vehicle as Record<string, unknown>);
+      }),
     );
 
-    return { data, total, page, limit };
+    return {
+      data,
+      total,
+      page: cursorRaw ? 1 : page,
+      limit,
+      ...(nextCursor ? { nextCursor } : {}),
+    };
   }
 
   // ──────────────────────────────────────────────────────────────────
@@ -720,6 +876,7 @@ export class VehiclesService {
   async getCallCenterList(
     page = 1,
     limit = 100,
+    cursor?: string,
     filters?: {
       sede?: string;
       model?: string;
@@ -741,14 +898,42 @@ export class VehiclesService {
       VehicleStatus.ENTREGADO,
     ];
 
-    // Traer TODOS para poder calcular el total y paginar
+    if (page > 1 && !cursor) {
+      throw new BadRequestException(
+        'La paginación por page>1 está obsoleta en vehicles/call-center. Use cursor (nextCursor) para continuar.',
+      );
+    }
+
+    // Traer TODOS para poder calcular el total y aplicar filtros en memoria
     const allSnap = await this.db
       .collection('vehicles')
       .where('status', 'in', CALL_CENTER_STATUSES)
       .get();
 
     if (allSnap.empty) {
-      return { data: [], total: 0, page, limit, totalPages: 0 };
+      return { data: [], total: 0, page: 1, limit, totalPages: 0 };
+    }
+
+    let cursorRefSeconds: number | null = null;
+    let cursorDocId: string | null = null;
+    if (cursor) {
+      try {
+        const parsed = JSON.parse(
+          Buffer.from(cursor, 'base64').toString('utf8'),
+        ) as { referenceSeconds?: number; docId?: string };
+        if (
+          typeof parsed.referenceSeconds === 'number' &&
+          typeof parsed.docId === 'string' &&
+          parsed.docId.trim().length > 0
+        ) {
+          cursorRefSeconds = parsed.referenceSeconds;
+          cursorDocId = parsed.docId;
+        } else {
+          throw new Error('cursor invalid structure');
+        }
+      } catch {
+        throw new BadRequestException('Cursor inválido para vehicles/call-center');
+      }
     }
 
     const statusSet = filters?.status
@@ -766,7 +951,7 @@ export class VehiclesService {
       dateTo.setUTCHours(23, 59, 59, 999);
     }
 
-    const allVehicles = allSnap.docs
+    const filteredVehicles: Array<Record<string, unknown> & { id: string }> = allSnap.docs
       .map((d) => ({ id: d.id, ...d.data() }))
       .filter((vehicle) => {
         if (filters?.sede && vehicle['sede'] !== filters.sede) return false;
@@ -796,13 +981,54 @@ export class VehiclesService {
         return true;
       });
 
-    const total = allVehicles.length;
-    const totalPages = Math.ceil(total / limit);
-    const safePage = Math.max(1, Math.min(page, totalPages));
-    const offset = (safePage - 1) * limit;
-    const vehiclesPage = allVehicles.slice(offset, offset + limit);
+    let allVehicles: Array<
+      Record<string, unknown> & { id: string; __referenceSeconds: number }
+    > = filteredVehicles
+      .map((vehicle) => ({
+        ...vehicle,
+        __referenceSeconds: Math.floor(
+          (
+            this.toDate(vehicle['deliveryDate']) ??
+            this.toDate(vehicle['statusChangedAt']) ??
+            this.toDate(vehicle['updatedAt']) ??
+            this.toDate(vehicle['createdAt']) ??
+            new Date(0)
+          ).getTime() / 1000,
+        ),
+      }))
+      .sort(
+        (a, b) =>
+          b.__referenceSeconds - a.__referenceSeconds ||
+          b.id.localeCompare(a.id),
+      );
 
-    const vehicles = vehiclesPage;
+    const fullTotal = allVehicles.length;
+
+    if (cursorRefSeconds !== null && cursorDocId) {
+      allVehicles = allVehicles.filter(
+        (vehicle) =>
+          vehicle.__referenceSeconds < cursorRefSeconds ||
+          (vehicle.__referenceSeconds === cursorRefSeconds &&
+            vehicle.id.localeCompare(cursorDocId) < 0),
+      );
+    }
+
+    const total = fullTotal;
+    const totalPages = Math.ceil(total / limit);
+    const vehiclesPage = allVehicles.slice(0, limit + 1);
+    const hasMore = vehiclesPage.length > limit;
+    const vehicles = vehiclesPage.slice(0, limit);
+    let nextCursor: string | null = null;
+    if (hasMore && vehicles.length > 0) {
+      const last = vehicles[vehicles.length - 1];
+      nextCursor = Buffer.from(
+        JSON.stringify({
+          referenceSeconds: last.__referenceSeconds,
+          docId: last.id,
+        }),
+        'utf8',
+      ).toString('base64');
+    }
 
     // 2. Batch-fetch documentations (single getAll call)
     const docRefs = vehicles.map((v) =>
@@ -923,7 +1149,14 @@ export class VehiclesService {
     });
 
     // 5. Retornar PaginatedResponse shape (compatible con frontend)
-    return { data, total, page: safePage, limit, totalPages };
+    return {
+      data,
+      total,
+      page: cursor ? 1 : page,
+      limit,
+      totalPages,
+      ...(nextCursor ? { nextCursor } : {}),
+    };
   }
 
   // ──────────────────────────────────────────────────────────────────

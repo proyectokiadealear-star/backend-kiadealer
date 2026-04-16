@@ -142,19 +142,21 @@ describe('VehiclesService (Call Center)', () => {
     });
 
     const result = await service.getCallCenterList(1, 100);
+    const withDocs = result.data.find((row: any) => row.id === 'v-1');
+    const withoutDocs = result.data.find((row: any) => row.id === 'v-2');
 
     expect(result.total).toBe(2);
-    expect(result.data[0].accessories).toEqual([
+    expect(withDocs?.accessories).toEqual([
       { key: 'SEGURO', classification: 'VENDIDO', vendido: true },
       { key: 'TELEMETRIA', classification: 'OBSEQUIADO', vendido: true },
     ]);
-    expect(result.data[0].documentationFound).toBe(true);
+    expect(withDocs?.documentationFound).toBe(true);
 
-    expect(result.data[1].accessories).toEqual([
+    expect(withoutDocs?.accessories).toEqual([
       { key: 'SEGURO', classification: null, vendido: false },
       { key: 'TELEMETRIA', classification: null, vendido: false },
     ]);
-    expect(result.data[1].documentationFound).toBe(false);
+    expect(withoutDocs?.documentationFound).toBe(false);
   });
 
   it('applies date, sede, model and status filters for call center feed', async () => {
@@ -209,7 +211,7 @@ describe('VehiclesService (Call Center)', () => {
       },
     });
 
-    const result = await service.getCallCenterList(1, 100, {
+    const result = await service.getCallCenterList(1, 100, undefined, {
       sede: 'SURMOTOR',
       model: 'sportage',
       status: 'ENTREGADO',

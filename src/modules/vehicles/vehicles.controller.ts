@@ -186,7 +186,7 @@ export class VehiclesController {
   @ApiOperation({
     summary: 'Listar vehículos con filtros y paginación',
     description:
-      'Sin ?sede, cada rol ve solo su sede. JEFE_TALLER y SOPORTE ven todas. Soporta filtros por estado, chasis, cliente y paginación. **Roles:** todos',
+      'Sin ?sede, cada rol ve solo su sede. JEFE_TALLER y SOPORTE ven todas. Soporta filtros por estado, chasis y cliente. Paginación cursor-first con `cursor` y `nextCursor` (page>1 obsoleto). **Roles:** todos',
   })
   @ApiResponse({
     status: 200,
@@ -267,11 +267,13 @@ export class VehiclesController {
     summary: 'Lista call center — vehículos DOCUMENTADO→ENTREGADO con accesorios seguro/telemetría',
     description:
       'Retorna vehículos desde DOCUMENTADO hasta ENTREGADO con información de propietario y estado ' +
-      'de sus accesorios de seguro y telemetría. Respuesta paginada compatible con PaginatedResponse<T>. ' +
+      'de sus accesorios de seguro y telemetría. Paginación cursor-first con `cursor` y `nextCursor` (page>1 obsoleto). ' +
+      'Respuesta compatible con PaginatedResponse<T>. ' +
       '**Roles:** JEFE_TALLER, SOPORTE',
   })
-  @ApiQuery({ name: 'page', required: false, type: Number, example: 1, description: 'Página (default 1)' })
+  @ApiQuery({ name: 'page', required: false, type: Number, example: 1, description: 'Página solo retrocompatible. page>1 requiere cursor.' })
   @ApiQuery({ name: 'limit', required: false, type: Number, example: 100, description: 'Ítems por página (default 100, máx 500)' })
+  @ApiQuery({ name: 'cursor', required: false, type: String, description: 'Cursor de paginación (base64)' })
   @ApiQuery({ name: 'sede', required: false, type: String, description: 'Filtrar por sede' })
   @ApiQuery({ name: 'model', required: false, type: String, description: 'Filtrar por modelo (normaliza KIA prefix)' })
   @ApiQuery({ name: 'status', required: false, type: String, description: 'Estado o lista CSV de estados del pipeline call center' })
@@ -286,6 +288,7 @@ export class VehiclesController {
   getCallCenterList(
     @Query('page') page?: string,
     @Query('limit') limit?: string,
+    @Query('cursor') cursor?: string,
     @Query('sede') sede?: string,
     @Query('model') model?: string,
     @Query('status') status?: string,
@@ -294,7 +297,7 @@ export class VehiclesController {
   ) {
     const parsedPage = page ? Math.max(1, Number(page)) : 1;
     const parsedLimit = limit ? Math.min(Number(limit), 500) : 100;
-    return this.svc.getCallCenterList(parsedPage, parsedLimit, {
+    return this.svc.getCallCenterList(parsedPage, parsedLimit, cursor || undefined, {
       sede: sede || undefined,
       model: model || undefined,
       status: status || undefined,

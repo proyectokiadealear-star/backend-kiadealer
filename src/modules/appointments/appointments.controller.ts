@@ -9,7 +9,11 @@ import {
   ApiTags,
 } from '@nestjs/swagger';
 import { AppointmentsService } from './appointments.service';
-import { CreateAppointmentDto, UpdateAppointmentDto } from './dto/appointment.dto';
+import {
+  CreateAppointmentDto,
+  QueryAppointmentsDto,
+  UpdateAppointmentDto,
+} from './dto/appointment.dto';
 import { FirebaseAuthGuard } from '../../common/guards/firebase-auth.guard';
 import { RolesGuard } from '../../common/guards/roles.guard';
 import { Roles } from '../../common/decorators/roles.decorator';
@@ -77,20 +81,22 @@ export class AppointmentsController {
     description:
       'JEFE_TALLER ve todas las sedes. Otros roles solo ven su sede. ' +
       'Filtrable por rango de fechas con `dateFrom` y `dateTo` (formato YYYY-MM-DD). ' +
+      'Paginación cursor-first con `cursor` y `nextCursor` (page>1 obsoleto). ' +
       '**Roles:** ASESOR, LIDER_TECNICO, JEFE_TALLER, SOPORTE',
   })
   @ApiQuery({ name: 'dateFrom', required: false, description: 'Fecha inicio filtro (YYYY-MM-DD)', example: '2026-03-01' })
   @ApiQuery({ name: 'dateTo', required: false, description: 'Fecha fin filtro (YYYY-MM-DD)', example: '2026-03-31' })
   @ApiQuery({ name: 'vehicleId', required: false, description: 'Filtrar por ID de vehículo específico (ej: pantalla de ceremonia)', example: 'abc-123' })
+  @ApiQuery({ name: 'page', required: false, type: Number, example: 1, description: 'Página solo retrocompatible. page>1 requiere cursor.' })
+  @ApiQuery({ name: 'limit', required: false, type: Number, example: 50, description: 'Tamaño de página (max 200)' })
+  @ApiQuery({ name: 'cursor', required: false, type: String, description: 'Cursor de paginación (base64)' })
   @ApiResponse({ status: 200, description: 'Lista de agendamientos ordenada por fecha ascendente' })
   @Roles(RoleEnum.ASESOR, RoleEnum.DOCUMENTACION ,RoleEnum.LIDER_TECNICO, RoleEnum.JEFE_TALLER, RoleEnum.SOPORTE, RoleEnum.SUPERVISOR)
   findAll(
     @CurrentUser() user: AuthenticatedUser,
-    @Query('dateFrom') dateFrom?: string,
-    @Query('dateTo') dateTo?: string,
-    @Query('vehicleId') vehicleId?: string,
+    @Query() query: QueryAppointmentsDto,
   ) {
-    return this.svc.findAll(user, dateFrom, dateTo, vehicleId);
+    return this.svc.findAll(user, query);
   }
 
   // ── REAGENDAR / ACTUALIZAR ────────────────────────────────

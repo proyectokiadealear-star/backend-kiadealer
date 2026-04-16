@@ -54,3 +54,38 @@ export class UpdateAppointmentDto {
   @IsString()
   assignedAdvisorName?: string;
 }
+
+export class QueryAppointmentsDto {
+  @ApiPropertyOptional({ description: 'Fecha inicio filtro (YYYY-MM-DD)', example: '2026-03-01' })
+  @IsOptional()
+  @IsString()
+  dateFrom?: string;
+
+  @ApiPropertyOptional({ description: 'Fecha fin filtro (YYYY-MM-DD)', example: '2026-03-31' })
+  @IsOptional()
+  @IsString()
+  dateTo?: string;
+
+  @ApiPropertyOptional({ description: 'Filtrar por ID de vehículo específico', example: 'abc-123' })
+  @IsOptional()
+  @IsString()
+  vehicleId?: string;
+
+  @ApiPropertyOptional({ default: 1, description: 'Página solo retrocompatible. page>1 requiere cursor.' })
+  @IsOptional()
+  @IsString()
+  page?: string;
+
+  @ApiPropertyOptional({ default: 50, description: 'Tamaño de página. Máximo 200.' })
+  @IsOptional()
+  @IsString()
+  limit?: string;
+
+  @ApiPropertyOptional({
+    description:
+      'Cursor de paginación (base64). Cursor-first con startAfter y orden estable; usar nextCursor de la respuesta.',
+  })
+  @IsOptional()
+  @IsString()
+  cursor?: string;
+}
