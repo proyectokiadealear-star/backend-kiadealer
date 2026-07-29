@@ -14,6 +14,12 @@ import { VehicleStatus } from '../../common/enums/vehicle-status.enum';
 import { AccessoryClassification } from '../../common/enums/accessory-key.enum';
 import { RoleEnum } from '../../common/enums/role.enum';
 import { AuthenticatedUser } from '../../common/interfaces/authenticated-user.interface';
+import {
+  DocumentationDocument,
+  DocumentationRepository,
+} from './documentation.repository';
+import { VehicleFieldsRepository } from './vehicle-fields.repository';
+import { ServiceOrderLookupRepository } from './service-order-lookup.repository';
 
 @Injectable()
 export class DocumentationService {
@@ -23,11 +29,10 @@ export class DocumentationService {
     private readonly firebase: FirebaseService,
     private readonly vehiclesService: VehiclesService,
     private readonly notificationsService: NotificationsService,
+    private readonly documentationRepo: DocumentationRepository,
+    private readonly vehicleFields: VehicleFieldsRepository,
+    private readonly serviceOrderLookup: ServiceOrderLookupRepository,
   ) {}
-
-  private get db() {
-    return this.firebase.firestore();
-  }
 
   async create(
     vehicleId: string,
@@ -147,7 +152,11 @@ export class DocumentationService {
           ? VehicleStatus.CERTIFICADO_STOCK
           : VehicleStatus.DOCUMENTADO;
 
-    const docData = {
+    // Tipado explícito: sin esto, el ternario de documentationStatus infiere
+    // `string` en vez de la unión literal 'PENDIENTE'|'COMPLETO' que exige
+    // DocumentationDocument, y el error solo aparece en `nest build` (tsc de
+    // proyecto completo), no en los tests unitarios vía ts-jest por archivo.
+    const docData: Omit<DocumentationDocument, 'tenantId' | 'id'> = {
       vehicleId,
       clientName: dto.clientName,
       clientId: dto.clientId,
@@ -171,7 +180,10 @@ export class DocumentationService {
       updatedAt: now,
     };
 
-    await this.db.collection('documentations').doc(vehicleId).set(docData);
+    // El id del documento es el vehicleId: relación 1:1 documentación-vehículo
+    // (mismo patrón que CertificationDocument/DeliveryCeremony). El repositorio
+    // pisa cualquier tenantId del payload con el del contexto — REQ-004.
+    await this.documentationRepo.create(docData, vehicleId);
 
     await this.vehiclesService.changeStatus(vehicleId, newStatus, user, {
       notes: isPending
@@ -332,7 +344,9 @@ export class DocumentationService {
       );
     }
 
-    await this.db.collection('vehicles').doc(vehicleId).update({
+    // Puente temporal: `vehicles` todavía no migró. Ver
+    // vehicle-fields.repository.ts. Se elimina cuando migre VehiclesService.
+    await this.vehicleFields.updateFields(vehicleId, {
       registrationReceivedDate,
       updatedAt: this.firebase.serverTimestamp(),
     });
@@ -367,10 +381,11 @@ export class DocumentationService {
   }
 
   async findOne(vehicleId: string) {
-    const doc = await this.db.collection('documentations').doc(vehicleId).get();
-    if (!doc.exists) throw new NotFoundException('Documentación no encontrada');
-
-    const data = doc.data()!;
+    // findByIdOrThrow: documento ajeno o inexistente → 404, nunca 403 (D-104).
+    const data: DocumentationDocument = await this.documentationRepo.findByIdOrThrow(
+      vehicleId,
+      () => new NotFoundException('Documentación no encontrada'),
+    );
     const basePath = `vehicles/${vehicleId}/docs`;
 
     // Regenerar todas las signed URLs en paralelo (antes: en serie con await)
@@ -458,15 +473,13 @@ export class DocumentationService {
       accessoryInvoices: Express.Multer.File[];
     },
   ) {
-    const docSnap = await this.db
-      .collection('documentations')
-      .doc(vehicleId)
-      .get();
-    if (!docSnap.exists)
-      throw new NotFoundException('Documentación no encontrada');
+    const existingData: DocumentationDocument =
+      await this.documentationRepo.findByIdOrThrow(
+        vehicleId,
+        () => new NotFoundException('Documentación no encontrada'),
+      );
 
     const vehicle = await this.vehiclesService.assertExists(vehicleId);
-    const existingData = docSnap.data()!;
 
     const { saveAsPending, accessories, ...restDto } = dto;
     const isReopening = !!vehicle['isReopening'];
@@ -577,7 +590,10 @@ export class DocumentationService {
       updatedFiles.push('Factura(s) accesorios');
     }
 
-    await this.db.collection('documentations').doc(vehicleId).update(updates);
+    await this.documentationRepo.update(
+      vehicleId,
+      updates as Partial<Omit<DocumentationDocument, 'tenantId' | 'id'>>,
+    );
 
     if (isCompleting && isReopening) {
       // ── REAPERTURA: Completar documentación → ASIGNADO (la OT ya existe) ──
@@ -585,22 +601,13 @@ export class DocumentationService {
       const reopenReason: string = vehicle['reopenReason'] ?? '';
       const reopenBy: string = vehicle['reopenRequestedByName'] ?? '';
 
-      // Buscar la OT existente del vehículo y agregar los nuevos accesorios al checklist
-      const orderSnap = await this.db
-        .collection('service-orders')
-        .where('vehicleId', '==', vehicleId)
-        .get();
+      // Buscar la OT existente del vehículo y agregar los nuevos accesorios al
+      // checklist. Puente temporal: `service-orders` todavía no migró. Ver
+      // service-order-lookup.repository.ts.
+      const currentOrder =
+        await this.serviceOrderLookup.findLatestByVehicleId(vehicleId);
 
-      const sortedOrders = orderSnap.docs
-        .map((d) => ({ id: d.id, ...d.data() }))
-        .sort(
-          (a, b) =>
-            ((b as any)['createdAt']?._seconds ?? 0) -
-            ((a as any)['createdAt']?._seconds ?? 0),
-        );
-
-      if (sortedOrders.length > 0) {
-        const currentOrder = sortedOrders[0] as Record<string, unknown>;
+      if (currentOrder) {
         const existingChecklist: Array<{ key: string; installed: boolean }> =
           Array.isArray(currentOrder['checklist'])
             ? (currentOrder['checklist'] as any)
@@ -621,19 +628,17 @@ export class DocumentationService {
           .filter((key) => !existingKeys.has(key))
           .map((key) => ({ key, classification: 'VENDIDO' }));
 
-        await this.db
-          .collection('service-orders')
-          .doc(currentOrder['id'] as string)
-          .update({
-            checklist: [...existingChecklist, ...newChecklistItems],
-            accessories: [...existingAccessories, ...newAccessoryItems],
-            status: 'ASIGNADA',
-            updatedAt: now,
-          });
+        await this.serviceOrderLookup.updateFields(currentOrder['id'], {
+          checklist: [...existingChecklist, ...newChecklistItems],
+          accessories: [...existingAccessories, ...newAccessoryItems],
+          status: 'ASIGNADA',
+          updatedAt: now,
+        });
       }
 
-      // Limpiar flags de reapertura del vehículo
-      await this.db.collection('vehicles').doc(vehicleId).update({
+      // Limpiar flags de reapertura del vehículo. Puente temporal: `vehicles`
+      // todavía no migró. Ver vehicle-fields.repository.ts.
+      await this.vehicleFields.updateFields(vehicleId, {
         isReopening: false,
         reopenReason: null,
         reopenAccessories: null,
@@ -783,14 +788,11 @@ export class DocumentationService {
   }
 
   async remove(vehicleId: string, user: AuthenticatedUser) {
-    const docSnap = await this.db
-      .collection('documentations')
-      .doc(vehicleId)
-      .get();
-    if (!docSnap.exists)
-      throw new NotFoundException('Documentación no encontrada');
-
-    const data = docSnap.data()!;
+    const data: DocumentationDocument =
+      await this.documentationRepo.findByIdOrThrow(
+        vehicleId,
+        () => new NotFoundException('Documentación no encontrada'),
+      );
     const vehicle = await this.vehiclesService.assertExists(vehicleId);
 
     // Eliminar sólo los PDFs que tienen URL almacenada (evitar conflictos en Storage)
@@ -828,7 +830,7 @@ export class DocumentationService {
     }
     await Promise.all(deleteJobs);
 
-    await this.db.collection('documentations').doc(vehicleId).delete();
+    await this.documentationRepo.delete(vehicleId);
 
     // Registrar en historial y notificar a JEFE_TALLER
     await Promise.all([
@@ -864,22 +866,20 @@ export class DocumentationService {
     user: AuthenticatedUser,
     index?: number,
   ) {
-    const docSnap = await this.db
-      .collection('documentations')
-      .doc(vehicleId)
-      .get();
-    if (!docSnap.exists)
-      throw new NotFoundException('Documentación no encontrada');
+    const data: DocumentationDocument =
+      await this.documentationRepo.findByIdOrThrow(
+        vehicleId,
+        () => new NotFoundException('Documentación no encontrada'),
+      );
 
     const vehicle = await this.vehiclesService.assertExists(vehicleId);
-    const data = docSnap.data()!;
     const basePath = `vehicles/${vehicleId}/docs`;
     let label: string;
 
     if (fileType === 'vehicleInvoice') {
       label = 'Factura vehículo';
       await this.firebase.deleteFile(`${basePath}/vehicle-invoice.pdf`);
-      await this.db.collection('documentations').doc(vehicleId).update({
+      await this.documentationRepo.update(vehicleId, {
         vehicleInvoiceUrl: null,
         updatedAt: this.firebase.serverTimestamp(),
       });
@@ -901,14 +901,11 @@ export class DocumentationService {
           // Como Firebase Storage no soporta rename, re-upload no es práctico.
           // Solo limpiamos la referencia; los paths en Storage quedan con gaps pero las URLs son absolutas.
         }
-        await this.db
-          .collection('documentations')
-          .doc(vehicleId)
-          .update({
-            giftEmailUrls: urls,
-            giftEmailUrl: urls[0] ?? null,
-            updatedAt: this.firebase.serverTimestamp(),
-          });
+        await this.documentationRepo.update(vehicleId, {
+          giftEmailUrls: urls,
+          giftEmailUrl: urls[0] ?? null,
+          updatedAt: this.firebase.serverTimestamp(),
+        });
         label = `Email regalo [${index}]`;
       } else {
         // Eliminar todos (legacy o sin index)
@@ -923,7 +920,7 @@ export class DocumentationService {
             .deleteFile(`${basePath}/gift-email.pdf`)
             .catch(() => {});
         }
-        await this.db.collection('documentations').doc(vehicleId).update({
+        await this.documentationRepo.update(vehicleId, {
           giftEmailUrls: [],
           giftEmailUrl: null,
           updatedAt: this.firebase.serverTimestamp(),
@@ -943,14 +940,11 @@ export class DocumentationService {
           `${basePath}/accessory-invoice-${index}.pdf`,
         );
         urls.splice(index, 1);
-        await this.db
-          .collection('documentations')
-          .doc(vehicleId)
-          .update({
-            accessoryInvoiceUrls: urls,
-            accessoryInvoiceUrl: urls[0] ?? null,
-            updatedAt: this.firebase.serverTimestamp(),
-          });
+        await this.documentationRepo.update(vehicleId, {
+          accessoryInvoiceUrls: urls,
+          accessoryInvoiceUrl: urls[0] ?? null,
+          updatedAt: this.firebase.serverTimestamp(),
+        });
         label = `Factura accesorios [${index}]`;
       } else {
         if (urls.length > 0) {
@@ -964,7 +958,7 @@ export class DocumentationService {
             .deleteFile(`${basePath}/accessory-invoice.pdf`)
             .catch(() => {});
         }
-        await this.db.collection('documentations').doc(vehicleId).update({
+        await this.documentationRepo.update(vehicleId, {
           accessoryInvoiceUrls: [],
           accessoryInvoiceUrl: null,
           updatedAt: this.firebase.serverTimestamp(),
@@ -1024,15 +1018,13 @@ export class DocumentationService {
       );
     }
 
-    // 3. Cargar documento de documentación (si existe)
-    const docSnap = await this.db
-      .collection('documentations')
-      .doc(vehicleId)
-      .get();
+    // 3. Cargar documento de documentación (si existe y es del concesionario
+    // activo — un documento ajeno se ve como inexistente, nunca como ajeno).
+    const existingDoc = await this.documentationRepo.findById(vehicleId);
 
     // 4 & 5. Eliminar PDFs de Storage y documento de Firestore (solo si existe)
-    if (docSnap.exists) {
-      const data = docSnap.data()!;
+    if (existingDoc) {
+      const data: DocumentationDocument = existingDoc;
       const basePath = `vehicles/${vehicleId}/docs`;
       const deleteJobs: Promise<void>[] = [];
 
@@ -1079,7 +1071,7 @@ export class DocumentationService {
       }
 
       await Promise.all(deleteJobs);
-      await this.db.collection('documentations').doc(vehicleId).delete();
+      await this.documentationRepo.delete(vehicleId);
     }
 
     // 6. Cambiar estado a POR_ARRIBAR y limpiar campos de cliente
@@ -1239,6 +1231,15 @@ export class DocumentationService {
     return { vehicleId, previousSede: vehicle['sede'], newSede };
   }
 
+  /**
+   * Cesión a otro concesionario del MISMO grupo (no otro tenant de la
+   * plataforma). `targetConcessionaire` es un string libre que queda como
+   * metadato del vehículo (`extraFields.targetConcessionaire`) — el
+   * documento nunca sale del tenant activo, solo cambia de estado a CEDIDO.
+   * Por eso esta operación NO usa `runAsPlatform()`: mover un documento
+   * entre tenants de la plataforma sería una operación de plataforma, pero
+   * acá no hay ningún tenant distinto involucrado. Ver docs/design/01-multi-tenancy.md D-106.
+   */
   async transferConcessionaire(
     vehicleId: string,
     targetConcessionaire: string,

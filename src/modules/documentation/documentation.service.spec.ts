@@ -1,9 +1,12 @@
 import { Test, TestingModule } from '@nestjs/testing';
-import { BadRequestException } from '@nestjs/common';
+import { BadRequestException, NotFoundException } from '@nestjs/common';
 import { DocumentationService } from './documentation.service';
 import { FirebaseService } from '../../firebase/firebase.service';
 import { VehiclesService } from '../vehicles/vehicles.service';
 import { NotificationsService } from '../notifications/notifications.service';
+import { DocumentationRepository } from './documentation.repository';
+import { VehicleFieldsRepository } from './vehicle-fields.repository';
+import { ServiceOrderLookupRepository } from './service-order-lookup.repository';
 import { VehicleStatus } from '../../common/enums/vehicle-status.enum';
 import { RoleEnum } from '../../common/enums/role.enum';
 import { SedeEnum } from '../../common/enums/sede.enum';
@@ -45,6 +48,30 @@ const buildNotificationsMock = () => ({
   notify: jest.fn().mockResolvedValue(undefined),
 });
 
+const buildDocumentationRepoMock = () => ({
+  create: jest.fn().mockResolvedValue(undefined),
+  findById: jest.fn().mockResolvedValue(null),
+  // Por defecto no hay documentación previa — igual que el `exists: false`
+  // del mock crudo original. Los tests que necesitan una existente
+  // sobrescriben esto con mockResolvedValue.
+  findByIdOrThrow: jest
+    .fn()
+    .mockImplementation((_id: string, notFound: () => Error) => {
+      throw notFound();
+    }),
+  update: jest.fn().mockResolvedValue(undefined),
+  delete: jest.fn().mockResolvedValue(true),
+});
+
+const buildVehicleFieldsMock = () => ({
+  updateFields: jest.fn().mockResolvedValue(true),
+});
+
+const buildServiceOrderLookupMock = () => ({
+  findLatestByVehicleId: jest.fn().mockResolvedValue(null),
+  updateFields: jest.fn().mockResolvedValue(true),
+});
+
 /** Minimal valid CreateDocumentationDto (non-pending) */
 const baseCreateDto = {
   clientName: 'Juan Pérez',
@@ -76,11 +103,17 @@ describe('DocumentationService — auto-advance to CERTIFICADO_STOCK', () => {
   let vehiclesService: ReturnType<typeof buildVehiclesServiceMock>;
   let notificationsService: ReturnType<typeof buildNotificationsMock>;
   let firebaseService: ReturnType<typeof buildFirebaseMock>;
+  let documentationRepo: ReturnType<typeof buildDocumentationRepoMock>;
+  let vehicleFields: ReturnType<typeof buildVehicleFieldsMock>;
+  let serviceOrderLookup: ReturnType<typeof buildServiceOrderLookupMock>;
 
   beforeEach(async () => {
     vehiclesService = buildVehiclesServiceMock();
     notificationsService = buildNotificationsMock();
     firebaseService = buildFirebaseMock();
+    documentationRepo = buildDocumentationRepoMock();
+    vehicleFields = buildVehicleFieldsMock();
+    serviceOrderLookup = buildServiceOrderLookupMock();
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -88,6 +121,12 @@ describe('DocumentationService — auto-advance to CERTIFICADO_STOCK', () => {
         { provide: FirebaseService, useFactory: () => firebaseService },
         { provide: VehiclesService, useFactory: () => vehiclesService },
         { provide: NotificationsService, useFactory: () => notificationsService },
+        { provide: DocumentationRepository, useFactory: () => documentationRepo },
+        { provide: VehicleFieldsRepository, useFactory: () => vehicleFields },
+        {
+          provide: ServiceOrderLookupRepository,
+          useFactory: () => serviceOrderLookup,
+        },
       ],
     }).compile();
 
@@ -225,20 +264,10 @@ describe('DocumentationService — auto-advance to CERTIFICADO_STOCK', () => {
     });
 
     // Mock existing documentation record
-    firebaseService.firestore = jest.fn().mockReturnValue({
-      collection: jest.fn().mockReturnValue({
-        doc: jest.fn().mockReturnValue({
-          get: jest.fn().mockResolvedValue({
-            exists: true,
-            data: () => ({
-              vehicleId: 'v14',
-              documentationStatus: 'PENDIENTE',
-            }),
-          }),
-          set: jest.fn().mockResolvedValue(undefined),
-          update: jest.fn().mockResolvedValue(undefined),
-        }),
-      }),
+    documentationRepo.findByIdOrThrow.mockResolvedValue({
+      id: 'v14',
+      vehicleId: 'v14',
+      documentationStatus: 'PENDIENTE',
     });
 
     // WHEN: update completing the pending documentation
@@ -270,17 +299,10 @@ describe('DocumentationService — auto-advance to CERTIFICADO_STOCK', () => {
       chassis: 'NOFACT-PEND',
     });
 
-    firebaseService.firestore = jest.fn().mockReturnValue({
-      collection: jest.fn().mockReturnValue({
-        doc: jest.fn().mockReturnValue({
-          get: jest.fn().mockResolvedValue({
-            exists: true,
-            data: () => ({ vehicleId: 'v15', documentationStatus: 'PENDIENTE' }),
-          }),
-          set: jest.fn().mockResolvedValue(undefined),
-          update: jest.fn().mockResolvedValue(undefined),
-        }),
-      }),
+    documentationRepo.findByIdOrThrow.mockResolvedValue({
+      id: 'v15',
+      vehicleId: 'v15',
+      documentationStatus: 'PENDIENTE',
     });
 
     const result = await service.update(
@@ -310,17 +332,10 @@ describe('DocumentationService — auto-advance to CERTIFICADO_STOCK', () => {
       chassis: 'NO-CERT-PEND',
     });
 
-    firebaseService.firestore = jest.fn().mockReturnValue({
-      collection: jest.fn().mockReturnValue({
-        doc: jest.fn().mockReturnValue({
-          get: jest.fn().mockResolvedValue({
-            exists: true,
-            data: () => ({ vehicleId: 'v16', documentationStatus: 'PENDIENTE' }),
-          }),
-          set: jest.fn().mockResolvedValue(undefined),
-          update: jest.fn().mockResolvedValue(undefined),
-        }),
-      }),
+    documentationRepo.findByIdOrThrow.mockResolvedValue({
+      id: 'v16',
+      vehicleId: 'v16',
+      documentationStatus: 'PENDIENTE',
     });
 
     const result = await service.update(

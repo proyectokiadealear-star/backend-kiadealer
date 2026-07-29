@@ -1,0 +1,12 @@
+rules_version = '2';
+
+// Mismo principio que firestore.rules: todo acceso a Storage pasa por el
+// backend (Firebase Admin SDK vía FirebaseService.uploadBuffer/getSignedUrl).
+// Ningún cliente lee ni escribe el bucket directamente.
+service firebase.storage {
+  match /b/{bucket}/o {
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+  }
+}

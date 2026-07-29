@@ -1,4 +1,11 @@
-import { IsEnum, IsNumber, IsOptional, IsString, Min, IsNotEmpty } from 'class-validator';
+import {
+  IsEnum,
+  IsNumber,
+  IsOptional,
+  IsString,
+  Min,
+  IsNotEmpty,
+} from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Transform } from 'class-transformer';
 
@@ -36,7 +43,8 @@ export class CreateCertificationDto {
 
   @ApiProperty({
     enum: RimsStatus,
-    description: 'Estado de los aros. Si se envía como multipart/form-data, adjuntar foto en el field «rims Photo».',
+    description:
+      'Estado de los aros. Si se envía como multipart/form-data, adjuntar foto en el field «rims Photo».',
     example: RimsStatus.BUENOS,
   })
   @IsEnum(RimsStatus)
@@ -67,7 +75,8 @@ export class CreateCertificationDto {
   trunkCover: InstalledStatus;
 
   @ApiProperty({
-    description: 'Kilometraje del vehículo al ingresar. Se genera notificación KILOMETRAJE_ALTO si supera 10 km.',
+    description:
+      'Kilometraje del vehículo al ingresar. Se genera notificación KILOMETRAJE_ALTO si supera 10 km.',
     example: 5,
     minimum: 0,
   })
@@ -77,7 +86,8 @@ export class CreateCertificationDto {
 
   @ApiProperty({
     enum: ImprintsStatus,
-    description: 'Estado de las improntas. SIN_IMPRONTAS dispara notificación a JEFE_TALLER, LIDER_TECNICO y DOCUMENTACION.',
+    description:
+      'Estado de las improntas. SIN_IMPRONTAS dispara notificación a JEFE_TALLER, LIDER_TECNICO y DOCUMENTACION.',
     example: ImprintsStatus.CON_IMPRONTAS,
   })
   @IsEnum(ImprintsStatus)
@@ -92,12 +102,15 @@ export class CreateCertificationDto {
   notes?: string;
 
   @ApiProperty({
-    description: 'Concesionario de origen del vehículo (se guarda en mayúsculas en el vehículo)',
+    description:
+      'Concesionario de origen del vehículo (se guarda en mayúsculas en el vehículo)',
     example: 'QUITO MOTORS',
   })
   @IsString()
   @IsNotEmpty()
-  @Transform(({ value }) => typeof value === 'string' ? value.toUpperCase() : value)
+  @Transform(({ value }) =>
+    typeof value === 'string' ? value.toUpperCase() : value,
+  )
   originConcessionaire: string;
 
   @ApiPropertyOptional({

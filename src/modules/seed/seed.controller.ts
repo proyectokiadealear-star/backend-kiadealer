@@ -16,6 +16,23 @@ export class RunSeedDto {
   @IsNotEmpty()
   secretKey: string;
 
+  /**
+   * ÚNICA excepción real en todo el sistema a "el tenantId nunca sale del
+   * payload" (D-102): /seed no pasa por FirebaseAuthGuard, así que no hay
+   * ningún actor autenticado del que derivarlo. Ver seed-platform-context.ts
+   * para la decisión de diseño completa. `runSeedPlatformOperation()` valida
+   * que exista y que el tenant esté provisionado antes de escribir nada.
+   */
+  @ApiProperty({
+    description:
+      'Id del concesionario a sembrar. Obligatorio: el seeder no tiene ' +
+      'usuario autenticado del que derivarlo (ver docs/design/01-multi-tenancy.md D-102).',
+    example: 'kia-quito',
+  })
+  @IsString()
+  @IsNotEmpty()
+  tenantId: string;
+
   @ApiProperty({
     description: 'Si es true, limpia las colecciones antes de insertar datos (¡destructivo!)',
     required: false,
@@ -59,7 +76,7 @@ export class SeedController {
       'Idempotente: si ya existe en Auth, solo actualiza claims.',
   })
   seedUsers(@Body() dto: RunSeedDto) {
-    return this.seedService.runSeedUsers(dto.secretKey);
+    return this.seedService.runSeedUsers(dto.secretKey, dto.tenantId);
   }
 
   @Post('run')
@@ -69,10 +86,12 @@ export class SeedController {
     description:
       'Carga catálogos, usuarios y vehículos de demo en Firestore/Firebase Auth. ' +
       'Requiere secretKey válida. Idempotente: omite registros que ya existen. ' +
-      'Usar `clear: true` con precaución (borra datos existentes).',
+      'Usar `clear: true` con precaución (borra datos existentes del tenant indicado).',
   })
   run(@Body() dto: RunSeedDto) {
-    return this.seedService.runSeed(dto.secretKey, { clear: dto.clear ?? false });
+    return this.seedService.runSeed(dto.secretKey, dto.tenantId, {
+      clear: dto.clear ?? false,
+    });
   }
 
   /**
@@ -80,6 +99,9 @@ export class SeedController {
    *
    * Diagnóstico: devuelve las columnas y las primeras 3 filas del archivo
    * SIN insertar nada en Firestore. Útil para verificar nombres de columnas.
+   *
+   * No recibe `tenantId`: no toca Firestore (solo parsea el archivo en
+   * memoria), así que no hay ningún tenant que resolver.
    */
   @Post('inspect-file')
   @HttpCode(HttpStatus.OK)
@@ -113,6 +135,10 @@ export class SeedController {
    * Importa vehículos desde Excel (.xlsx/.xls) o CSV.
    * Búsqueda de columnas fuzzy: sin tildes, case-insensitive.
    * Si no sabes los nombres exactos de columna, usa /seed/inspect-file primero.
+   *
+   * `tenantId` viaja como campo de formulario (multipart) igual que
+   * `secretKey` — mismo patrón ya usado en este endpoint, validado en
+   * `runSeedPlatformOperation()` (ver seed-platform-context.ts).
    */
   @Post('from-excel')
   @HttpCode(HttpStatus.OK)
@@ -121,11 +147,12 @@ export class SeedController {
   @ApiBody({
     schema: {
       type: 'object',
-      required: ['secretKey', 'file'],
+      required: ['secretKey', 'tenantId', 'file'],
       properties: {
         secretKey: { type: 'string', example: 'kia-seed-2024' },
+        tenantId: { type: 'string', example: 'kia-quito' },
         file: { type: 'string', format: 'binary' },
-        clear: { type: 'string', enum: ['true', 'false'], default: 'false', description: 'Si es "true", borra todas las colecciones antes de importar (¡destructivo!)' },
+        clear: { type: 'string', enum: ['true', 'false'], default: 'false', description: 'Si es "true", borra los datos del tenant antes de importar (¡destructivo!)' },
       },
     },
   })
@@ -133,17 +160,18 @@ export class SeedController {
     summary: 'Importar vehículos desde Excel o CSV',
     description:
       'Lee la primera hoja del archivo .xlsx/.xls o el CSV y ejecuta el seed. ' +
-      'Idempotente: omite chasis ya existentes. Requiere secretKey válida. ' +
-      'Pasar clear=true para borrar datos existentes antes de importar (usar con precaución). ' +
+      'Idempotente: omite chasis ya existentes. Requiere secretKey y tenantId válidos. ' +
+      'Pasar clear=true para borrar datos existentes del tenant antes de importar (usar con precaución). ' +
       'Usa /seed/inspect-file para verificar que las columnas sean detectadas correctamente.',
   })
   async fromExcel(
     @UploadedFile() file: Express.Multer.File,
     @Body('secretKey') secretKey: string,
+    @Body('tenantId') tenantId: string,
     @Body('clear') clear?: string,
   ) {
     if (!file) throw new BadRequestException('Se requiere un archivo Excel o CSV (campo "file")');
-    return this.seedService.seedFromExcel(file.buffer, file.mimetype, secretKey, {
+    return this.seedService.seedFromExcel(file.buffer, file.mimetype, secretKey, tenantId, {
       clear: clear === 'true',
     });
   }
@@ -164,6 +192,6 @@ export class SeedController {
       'Los datos base del vehículo (chasis, modelo, año, color, sede, datos de cliente) se conservan.',
   })
   resetToPorArribar(@Body() dto: RunSeedDto) {
-    return this.seedService.resetToPorArribar(dto.secretKey);
+    return this.seedService.resetToPorArribar(dto.secretKey, dto.tenantId);
   }
 }

@@ -1,5 +1,9 @@
-import { BadRequestException, Injectable, Logger } from '@nestjs/common';
-import { FirebaseService } from '../../firebase/firebase.service';
+import {
+  BadRequestException,
+  Injectable,
+  Logger,
+  NotFoundException,
+} from '@nestjs/common';
 import { AuthenticatedUser } from '../../common/interfaces/authenticated-user.interface';
 import { RoleEnum } from '../../common/enums/role.enum';
 import PDFDocument = require('pdfkit');
@@ -9,18 +13,27 @@ import {
   AnalyticsFiltersApplied,
   AnalyticsResponseContract,
 } from './contracts/analytics.contract';
+import { VehicleLookupRepository } from './vehicle-lookup.repository';
+import {
+  ReportServiceOrdersRepository,
+  ReportDocumentationsRepository,
+  ReportDeliveryCeremoniesRepository,
+  ReportAppointmentsRepository,
+  ReportAccessoriesCatalogRepository,
+} from './reports.repository';
 
 @Injectable()
 export class ReportsService {
   private readonly logger = new Logger(ReportsService.name);
 
   constructor(
-    private readonly firebase: FirebaseService,
+    private readonly vehicleLookup: VehicleLookupRepository,
+    private readonly serviceOrders: ReportServiceOrdersRepository,
+    private readonly documentations: ReportDocumentationsRepository,
+    private readonly deliveryCeremonies: ReportDeliveryCeremoniesRepository,
+    private readonly appointments: ReportAppointmentsRepository,
+    private readonly accessoriesCatalogRepo: ReportAccessoriesCatalogRepository,
   ) {}
-
-  private get db() {
-    return this.firebase.firestore();
-  }
 
   private normalizeAccessoryKey(input: unknown): string {
     if (typeof input !== 'string') return 'UNKNOWN';
@@ -393,48 +406,26 @@ export class ReportsService {
     const { sede, modelNormalized, dateFromTs, dateToTs, groupBy, filtersApplied } =
       this.normalizeFilters(filters);
 
-    // ── Fetch all collections in parallel ──────────────────────────────
-    const [
-      vehiclesSnap,
-      ordersSnap,
-      docsSnap,
-      ceremoniesSnap,
-      appointmentsSnap,
-      accessoriesCatalogSnap,
-    ] =
-      await Promise.all([
-        this.db.collection('vehicles').get(),
-        this.db.collection('service-orders').get(),
-        this.db.collection('documentations').get(),
-        this.db.collection('deliveryCeremonies').get(),
-        this.db.collection('appointments').get(),
-        this.db.collection('catalogs').doc('accessories').collection('items').get(),
-      ]);
-
-    const all: any[] = vehiclesSnap.docs.map((d) => ({
-      id: d.id,
-      ...d.data(),
-    }));
-    const allOrders: any[] = ordersSnap.docs.map((d) => ({
-      id: d.id,
-      ...d.data(),
-    }));
-    const allDocs: any[] = docsSnap.docs.map((d) => ({
-      id: d.id,
-      ...d.data(),
-    }));
-    const allCeremonies: any[] = ceremoniesSnap.docs.map((d) => ({
-      id: d.id,
-      ...d.data(),
-    }));
-    const allAppointments: any[] = appointmentsSnap.docs.map((d) => ({
-      id: d.id,
-      ...d.data(),
-    }));
-    const accessoriesCatalog: any[] = accessoriesCatalogSnap.docs.map((d) => ({
-      id: d.id,
-      ...d.data(),
-    }));
+    // ── Fetch all collections in parallel, cada una ya acotada al tenant ──
+    // activo por su propio repositorio (bridge para `vehicles`, que aún no
+    // migró; TenantScopedRepository.findAll() para el resto). Antes de esta
+    // migración estas cinco últimas se leían con `.get()` crudo, sin
+    // `where('tenantId', ...)` — ver el encabezado de reports.repository.ts.
+    const [all, allOrders, allDocs, allCeremonies, allAppointments, accessoriesCatalog]: [
+      any[],
+      any[],
+      any[],
+      any[],
+      any[],
+      any[],
+    ] = await Promise.all([
+      this.vehicleLookup.findAllAccessible(),
+      this.serviceOrders.findAll(),
+      this.documentations.findAll(),
+      this.deliveryCeremonies.findAll(),
+      this.appointments.findAll(),
+      this.accessoriesCatalogRepo.findAll(),
+    ]);
 
     // Build vehicleId → sede lookup for cross-collection joins
     const vehicleSedeMap: Record<string, string> = {};
@@ -810,9 +801,10 @@ export class ReportsService {
     const doc = new PDFDocument({ margin: 40 });
     const chunks: Buffer[] = [];
     doc.on('data', (chunk: Buffer) => chunks.push(chunk));
-    const snap = await this.db.collection('vehicles').doc(vehicleId).get();
-    if (!snap.exists) throw new Error('Vehicle not found');
-    const v = snap.data() as any;
+    // Documento ajeno → null → 404, nunca 403 (D-104): un vehículo de otro
+    // concesionario es indistinguible de uno inexistente.
+    const v: any = await this.vehicleLookup.findByIdAccessible(vehicleId);
+    if (!v) throw new NotFoundException('Vehicle not found');
     doc.fontSize(18).text('Reporte de Trazabilidad', { align: 'center' });
     doc.moveDown();
     doc.fontSize(12).text('ID: ' + vehicleId);
@@ -827,11 +819,13 @@ export class ReportsService {
   }
 
   async getTechnicianPerformance(uid: string) {
-    const snap = await this.db
-      .collection('vehicles')
-      .where('assignedTechnicianUid', '==', uid)
-      .get();
-    const vehicles = snap.docs.map((d) => ({ id: d.id, ...d.data() })) as any[];
+    // Hallazgo corregido acá: la consulta original filtraba SOLO por
+    // `assignedTechnicianUid`, sin ningún límite de concesionario — un `uid`
+    // de técnico no es, por sí solo, un límite de aislamiento. `vehicles`
+    // todavía no migró, así que el filtro de tenant se aplica en memoria vía
+    // el puente (ver VehicleLookupRepository).
+    const vehicles: any[] =
+      await this.vehicleLookup.findByAssignedTechnician(uid);
     const completed = vehicles.filter((v) => v.status === 'ENTREGADO').length;
     return {
       uid,

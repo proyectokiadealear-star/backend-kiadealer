@@ -1,0 +1,56 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+
+jobs:
+  # Rápido y sin dependencias externas: corre en cada push, es la primera
+  # señal. Ver docs/design/05-estrategia-de-pruebas.md §6.
+  lint-and-unit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - run: npm run lint
+
+      # Bloquea el merge si la cobertura cae por debajo del umbral en
+      # package.json → jest.coverageThreshold.
+      - run: npm test -- --coverage
+
+      - run: npm run test:shape
+
+  # Requiere el Firebase Emulator Suite (Firestore corre sobre Java).
+  # Solo en pull request: es más lento y no aporta señal nueva en cada push.
+  integration-and-bdd:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - run: npm ci
+
+      - run: npm run test:integration
+
+      # Solo los escenarios @critico: aislamiento, auditoría, proyección
+      # pública. La suite BDD completa corre nightly, no en cada PR.
+      - run: npm run test:bdd:critico

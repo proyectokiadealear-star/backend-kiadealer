@@ -38,6 +38,9 @@ export class FirebaseAuthGuard implements CanActivate {
         sede: decoded.sede,
         active: decoded.active,
         displayName: decoded.name,
+        tenantId: decoded.tenantId,
+        establishmentIds: decoded.establishmentIds ?? [],
+        platformAdmin: decoded.platformAdmin === true,
       } as AuthenticatedUser;
 
       return true;

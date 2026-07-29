@@ -1,7 +1,14 @@
+import { NotFoundException } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import { ReportsService } from './reports.service';
-import { FirebaseService } from '../../firebase/firebase.service';
-import { VehiclesService } from '../vehicles/vehicles.service';
+import { VehicleLookupRepository } from './vehicle-lookup.repository';
+import {
+  ReportServiceOrdersRepository,
+  ReportDocumentationsRepository,
+  ReportDeliveryCeremoniesRepository,
+  ReportAppointmentsRepository,
+  ReportAccessoriesCatalogRepository,
+} from './reports.repository';
 import { RoleEnum } from '../../common/enums/role.enum';
 import { SedeEnum } from '../../common/enums/sede.enum';
 import { AuthenticatedUser } from '../../common/interfaces/authenticated-user.interface';
@@ -9,18 +16,29 @@ import { ALL_VEHICLE_STATUSES } from './contracts/analytics.contract';
 
 type DocRow = { id: string; [key: string]: any };
 
-const makeSnap = (rows: DocRow[]) => ({
-  docs: rows.map((row) => ({
-    id: row.id,
-    data: () => {
-      const { id, ...data } = row;
-      return data;
-    },
-  })),
-});
-
 describe('ReportsService', () => {
   let service: ReportsService;
+  let vehicleLookup: jest.Mocked<
+    Pick<
+      VehicleLookupRepository,
+      'findAllAccessible' | 'findByIdAccessible' | 'findByAssignedTechnician'
+    >
+  >;
+  let serviceOrders: jest.Mocked<
+    Pick<ReportServiceOrdersRepository, 'findAll'>
+  >;
+  let documentations: jest.Mocked<
+    Pick<ReportDocumentationsRepository, 'findAll'>
+  >;
+  let deliveryCeremonies: jest.Mocked<
+    Pick<ReportDeliveryCeremoniesRepository, 'findAll'>
+  >;
+  let appointmentsRepo: jest.Mocked<
+    Pick<ReportAppointmentsRepository, 'findAll'>
+  >;
+  let accessoriesCatalogRepo: jest.Mocked<
+    Pick<ReportAccessoriesCatalogRepository, 'findAll'>
+  >;
 
   const user: AuthenticatedUser = {
     uid: 'u-admin',
@@ -39,45 +57,53 @@ describe('ReportsService', () => {
     appointments?: DocRow[];
     accessoriesCatalog?: DocRow[];
   }) => {
-    const firebaseMock = {
-      firestore: jest.fn().mockReturnValue({
-        collection: jest.fn((name: string) => ({
-          doc:
-            name === 'catalogs'
-              ? jest.fn((docId: string) => ({
-                  collection: jest.fn((sub: string) => ({
-                    get: jest.fn().mockResolvedValue(
-                      docId === 'accessories' && sub === 'items'
-                        ? makeSnap(data.accessoriesCatalog ?? [])
-                        : makeSnap([]),
-                    ),
-                  })),
-                }))
-              : undefined,
-          get: jest
-            .fn()
-            .mockResolvedValue(
-              name === 'vehicles'
-                ? makeSnap(data.vehicles ?? [])
-                : name === 'service-orders'
-                  ? makeSnap(data.orders ?? [])
-                  : name === 'documentations'
-                    ? makeSnap(data.docs ?? [])
-                    : name === 'deliveryCeremonies'
-                      ? makeSnap(data.ceremonies ?? [])
-                  : name === 'appointments'
-                        ? makeSnap(data.appointments ?? [])
-                      : makeSnap([]),
-            ),
-        })),
-      }),
+    // Cada repositorio ya devuelve datos acotados al tenant activo (eso lo
+    // garantiza TenantScopedRepository/MigrationBridgeRepository, testeado
+    // aparte en tenant-scoped.repository.spec.ts y
+    // vehicle-lookup.repository.spec.ts). Acá solo importa que ReportsService
+    // consuma esos repositorios y arme el agregado correctamente — por eso el
+    // mock resuelve directamente el arreglo "ya filtrado".
+    vehicleLookup = {
+      findAllAccessible: jest.fn().mockResolvedValue(data.vehicles ?? []),
+      findByIdAccessible: jest.fn(),
+      findByAssignedTechnician: jest.fn(),
+    };
+    serviceOrders = { findAll: jest.fn().mockResolvedValue(data.orders ?? []) };
+    documentations = { findAll: jest.fn().mockResolvedValue(data.docs ?? []) };
+    deliveryCeremonies = {
+      findAll: jest.fn().mockResolvedValue(data.ceremonies ?? []),
+    };
+    appointmentsRepo = {
+      findAll: jest.fn().mockResolvedValue(data.appointments ?? []),
+    };
+    accessoriesCatalogRepo = {
+      findAll: jest.fn().mockResolvedValue(data.accessoriesCatalog ?? []),
     };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         ReportsService,
-        { provide: FirebaseService, useValue: firebaseMock },
-        { provide: VehiclesService, useValue: {} },
+        { provide: VehicleLookupRepository, useFactory: () => vehicleLookup },
+        {
+          provide: ReportServiceOrdersRepository,
+          useFactory: () => serviceOrders,
+        },
+        {
+          provide: ReportDocumentationsRepository,
+          useFactory: () => documentations,
+        },
+        {
+          provide: ReportDeliveryCeremoniesRepository,
+          useFactory: () => deliveryCeremonies,
+        },
+        {
+          provide: ReportAppointmentsRepository,
+          useFactory: () => appointmentsRepo,
+        },
+        {
+          provide: ReportAccessoriesCatalogRepository,
+          useFactory: () => accessoriesCatalogRepo,
+        },
       ],
     }).compile();
 
@@ -125,11 +151,22 @@ describe('ReportsService', () => {
     }
   });
 
+  it('reads every collection through its scoped repository, never through Firestore directo', async () => {
+    service = await buildService({});
+
+    await service.getAnalytics(user, {});
+
+    expect(vehicleLookup.findAllAccessible).toHaveBeenCalledTimes(1);
+    expect(serviceOrders.findAll).toHaveBeenCalledTimes(1);
+    expect(documentations.findAll).toHaveBeenCalledTimes(1);
+    expect(deliveryCeremonies.findAll).toHaveBeenCalledTimes(1);
+    expect(appointmentsRepo.findAll).toHaveBeenCalledTimes(1);
+    expect(accessoriesCatalogRepo.findAll).toHaveBeenCalledTimes(1);
+  });
+
   it('applies date semantics by KPI family (inventory ignores date; delivery/events honor date)', async () => {
     service = await buildService({
-      accessoriesCatalog: [
-        { id: 'laminas', key: 'LAMINAS', name: 'LAMINAS' },
-      ],
+      accessoriesCatalog: [{ id: 'laminas', key: 'LAMINAS', name: 'LAMINAS' }],
       vehicles: [
         {
           id: 'v1',
@@ -477,7 +514,9 @@ describe('ReportsService', () => {
     });
 
     expect(analytics.deliverySeriesGranularity).toBe('week');
-    expect(analytics.byMonthlyDeliveries.some((item) => item.month.includes('-W'))).toBe(true);
+    expect(
+      analytics.byMonthlyDeliveries.some((item) => item.month.includes('-W')),
+    ).toBe(true);
     const deliveriesInSeries = analytics.byMonthlyDeliveries.reduce(
       (sum, item) => sum + item.count,
       0,
@@ -600,5 +639,77 @@ describe('ReportsService', () => {
       incomplete_accessories: 1,
     });
     expect(analytics.otif.definitionVersion).toBe('v1');
+  });
+
+  // ── generateVehicleReport() — trazabilidad en PDF ──────────────────────
+  describe('generateVehicleReport()', () => {
+    it('genera el PDF cuando el vehículo es accesible desde el tenant activo', async () => {
+      service = await buildService({});
+      vehicleLookup.findByIdAccessible.mockResolvedValue({
+        id: 'v1',
+        model: 'KIA SPORTAGE',
+        vin: 'VIN123',
+        status: 'ENTREGADO',
+        sede: 'SURMOTOR',
+      });
+
+      const buffer = await service.generateVehicleReport('v1', user);
+
+      expect(vehicleLookup.findByIdAccessible).toHaveBeenCalledWith('v1');
+      expect(Buffer.isBuffer(buffer)).toBe(true);
+      expect(buffer.length).toBeGreaterThan(0);
+    });
+
+    it('responde 404 (NotFoundException), nunca 403, para un vehículo de otro concesionario', async () => {
+      // D-104: acceso cruzado indistinguible de "no existe" — el repositorio
+      // ya devuelve null tanto si el vehículo no existe como si es ajeno.
+      service = await buildService({});
+      vehicleLookup.findByIdAccessible.mockResolvedValue(null);
+
+      await expect(
+        service.generateVehicleReport('vehicle-ajeno', user),
+      ).rejects.toThrow(NotFoundException);
+    });
+  });
+
+  // ── getTechnicianPerformance() — corrige el hallazgo más grave ─────────
+  describe('getTechnicianPerformance()', () => {
+    it('calcula el rendimiento solo con vehículos accesibles del tenant activo', async () => {
+      service = await buildService({});
+      vehicleLookup.findByAssignedTechnician.mockResolvedValue([
+        { id: 'v1', status: 'ENTREGADO' },
+        { id: 'v2', status: 'ASIGNADO' },
+      ]);
+
+      const result = await service.getTechnicianPerformance('tech-1');
+
+      expect(vehicleLookup.findByAssignedTechnician).toHaveBeenCalledWith(
+        'tech-1',
+      );
+      expect(result).toEqual({
+        uid: 'tech-1',
+        totalAssigned: 2,
+        totalCompleted: 1,
+        completionRate: 50,
+      });
+    });
+
+    it('no filtra por sí sola con el uid del técnico: delega el scope de tenant al repositorio', async () => {
+      // Este es el hallazgo original: la consulta vieja solo filtraba por
+      // assignedTechnicianUid, sin ningún límite de concesionario. Acá se
+      // verifica que ReportsService ya NO arma esa consulta a mano: delega
+      // por completo en VehicleLookupRepository, que sí aplica el scope.
+      service = await buildService({});
+      vehicleLookup.findByAssignedTechnician.mockResolvedValue([]);
+
+      const result = await service.getTechnicianPerformance('tech-ajeno');
+
+      expect(result).toEqual({
+        uid: 'tech-ajeno',
+        totalAssigned: 0,
+        totalCompleted: 0,
+        completionRate: 0,
+      });
+    });
   });
 });

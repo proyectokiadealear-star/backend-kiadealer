@@ -2,13 +2,15 @@ import {
   Injectable,
   UnauthorizedException,
   InternalServerErrorException,
-  NotFoundException,
   Logger,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { FirebaseService } from '../../firebase/firebase.service';
 import { LoginDto } from './dto/login.dto';
 import { ForgotPasswordDto } from './dto/forgot-password.dto';
+import { AuthRepository } from './auth.repository';
+import { RoleEnum } from '../../common/enums/role.enum';
+import { SedeEnum } from '../../common/enums/sede.enum';
 import {
   RefreshTokenDocument,
   RefreshTokenService,
@@ -34,6 +36,7 @@ export class AuthService {
     private readonly firebase: FirebaseService,
     private readonly config: ConfigService,
     private readonly refreshTokenService: RefreshTokenService,
+    private readonly authRepository: AuthRepository,
   ) {}
 
   async login(dto: LoginDto) {
@@ -86,20 +89,20 @@ export class AuthService {
       );
     }
 
-    // 3. Obtener perfil de Firestore
-    const userDoc = await this.firebase
-      .firestore()
-      .collection('users')
-      .doc(decoded.uid)
-      .get();
-
-    const profile = userDoc.exists ? userDoc.data() : null;
+    // 3. Obtener perfil de Firestore — vía AuthRepository, sin TenantContext
+    // (ver docblock de AuthRepository: acá todavía no existe uno)
+    const profile = await this.authRepository.findUserProfileById(decoded.uid);
 
     this.logger.log(`Login exitoso: ${decoded.uid} (${decoded.email})`);
 
+    // El tenantId sale de la custom claim ya verificada por Admin SDK
+    // (nunca del payload de la request) y queda guardado en el documento del
+    // refresh token para poder validar coherencia al refrescar — ver
+    // RefreshTokenService.exchangeToken().
     const customRefreshToken = await this.refreshTokenService.createToken(
       decoded.uid,
       signInData.refreshToken,
+      decoded.tenantId as string | undefined,
     );
 
     return {
@@ -109,10 +112,13 @@ export class AuthService {
       user: {
         uid: decoded.uid,
         email: decoded.email,
-        displayName: profile?.['displayName'] ?? decoded.name ?? '',
-        role: decoded.role,
-        sede: decoded.sede,
-        active: decoded.active,
+        displayName:
+          (profile?.['displayName'] as string | undefined) ??
+          (decoded.name as string | undefined) ??
+          '',
+        role: decoded.role as RoleEnum,
+        sede: decoded.sede as SedeEnum,
+        active: decoded.active as boolean,
       },
     };
   }
@@ -122,14 +128,10 @@ export class AuthService {
     const url = `https://identitytoolkit.googleapis.com/v1/accounts:sendOobCode?key=${apiKey}`;
 
     // Verificar que el usuario existe en Firestore antes de enviar el correo
-    const usersSnap = await this.firebase
-      .firestore()
-      .collection('users')
-      .where('email', '==', dto.email)
-      .limit(1)
-      .get();
+    // — vía AuthRepository, sin TenantContext (ver docblock de la clase)
+    const userDoc = await this.authRepository.findUserByEmail(dto.email);
 
-    if (usersSnap.empty) {
+    if (!userDoc) {
       // Respuesta genérica por seguridad (no revelar si el email existe o no)
       this.logger.warn(
         `Intento de reset para email no registrado: ${dto.email}`,
@@ -140,7 +142,6 @@ export class AuthService {
       };
     }
 
-    const userDoc = usersSnap.docs[0].data();
     if (!userDoc['active']) {
       this.logger.warn(`Intento de reset para usuario inactivo: ${dto.email}`);
       return {

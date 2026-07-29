@@ -20,6 +20,10 @@ lerna-debug.log*
 /coverage
 /.nyc_output
 
+# Firebase emulator
+/.firebase
+firebase-export-*/
+
 # IDEs and editors
 /.idea
 .project

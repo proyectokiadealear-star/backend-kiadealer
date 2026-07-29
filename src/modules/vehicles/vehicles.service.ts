@@ -216,6 +216,14 @@ export class VehiclesService {
       ref = ref.where('status', 'in', activeStatuses);
     }
 
+    // clientId es igualdad exacta: Firestore la resuelve server-side. A
+    // diferencia de chassis (que necesita substring y sí exige traer todo a
+    // memoria), acotar acá evita leer la flota activa completa de la sede
+    // solo para encontrar los vehículos de un cliente puntual.
+    if (query.clientId) {
+      ref = ref.where('clientId', '==', query.clientId);
+    }
+
     // ── Parse date range filter ──────────────────────────────────────
     let dateFromTs: number | null = null;
     let dateToTs: number | null = null;
@@ -230,9 +238,13 @@ export class VehiclesService {
     }
 
     const needsDateFilter = !!(dateFromTs || dateToTs);
-    const needsTextFilter = !!(query.chassis || query.clientId);
+    // chassis es substring (.includes()): Firestore no puede resolverlo
+    // server-side, así que exige traer a memoria lo que ref ya haya acotado
+    // (sede + status + clientId si vino). clientId ya NO dispara esta rama:
+    // se resuelve arriba con where('clientId', ...) nativo.
+    const needsChassisFilter = !!query.chassis;
     // Date filter requires in-memory pass (Firestore 'in' + range = not supported)
-    const needsMemoryFilter = needsTextFilter || needsDateFilter;
+    const needsMemoryFilter = needsChassisFilter || needsDateFilter;
     const page = query.page ?? 1;
     const limit = Math.min(query.limit ?? 200, 200);
     const cursorRaw = query.cursor;
@@ -306,9 +318,8 @@ export class VehiclesService {
           (v.chassis as string).toLowerCase().includes(chassisLower),
         );
       }
-      if (query.clientId) {
-        vehicles = vehicles.filter((v) => v.clientId === query.clientId);
-      }
+      // clientId ya se aplicó server-side sobre `ref` — no hace falta
+      // repetirlo en memoria.
 
       // Apply date range on statusChangedAt (última acción real del pipeline)
       if (dateFromTs || dateToTs) {

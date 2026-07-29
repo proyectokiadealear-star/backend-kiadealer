@@ -22,7 +22,23 @@ import { RefreshTokenGuard } from './refresh-token.guard';
 import { FirebaseAuthGuard } from '../../common/guards/firebase-auth.guard';
 import { RefreshTokenDocument } from './refresh-token.service';
 import { AuthenticatedUser } from '../../common/interfaces/authenticated-user.interface';
+import { TenantExempt } from '../../common/decorators/tenant-exempt.decorator';
 
+/**
+ * Rutas exentas de TenantGuard vía @TenantExempt(): login, forgot-password,
+ * refresh y logout. Las cuatro corren ANTES de que exista un tenant
+ * resuelto — ninguna pasa por FirebaseAuthGuard, así que `req.user` no
+ * existe y TenantGuard rechazaría con 401 "Token sin concesionario
+ * asignado" en el 100% de los intentos de login. Ver docblock de
+ * AuthRepository / RefreshTokenRepository para el detalle.
+ *
+ * `logout-all` es la excepción a propósito: SÍ pasa por FirebaseAuthGuard
+ * (requiere un idToken Bearer vigente), así que para esa ruta `req.user`
+ * existe y TenantGuard puede validar normalmente que el concesionario esté
+ * activo — no hace falta eximirla, y no eximirla es lo correcto: no hay
+ * motivo para que un token de un concesionario dado de baja pueda seguir
+ * operando.
+ */
 @ApiTags('Auth')
 @Controller('auth')
 export class AuthController {
@@ -30,6 +46,7 @@ export class AuthController {
 
   @Post('login')
   @HttpCode(HttpStatus.OK)
+  @TenantExempt()
   @ApiOperation({
     summary: 'Login con email y contraseña',
     description:
@@ -59,6 +76,7 @@ export class AuthController {
 
   @Post('forgot-password')
   @HttpCode(HttpStatus.OK)
+  @TenantExempt()
   @ApiOperation({
     summary: 'Solicitar restablecimiento de contraseña',
     description:
@@ -81,6 +99,7 @@ export class AuthController {
   @Post('refresh')
   @HttpCode(HttpStatus.OK)
   @UseGuards(RefreshTokenGuard)
+  @TenantExempt()
   @ApiOperation({
     summary: 'Renovar idToken con refresh token',
     description:
@@ -106,6 +125,7 @@ export class AuthController {
   @Post('logout')
   @HttpCode(HttpStatus.OK)
   @UseGuards(RefreshTokenGuard)
+  @TenantExempt()
   @ApiOperation({
     summary: 'Cerrar sesión',
     description: 'Revoca el refresh token indicado, cerrando la sesión actual.',

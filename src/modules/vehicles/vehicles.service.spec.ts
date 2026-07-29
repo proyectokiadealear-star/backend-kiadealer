@@ -37,14 +37,26 @@ const mockDocRef = (data: Record<string, any> | null) => {
   };
 };
 
-const mockQuery = (docs: Record<string, any>[]) => ({
-  where: jest.fn().mockReturnThis(),
-  orderBy: jest.fn().mockReturnThis(),
-  limit: jest.fn().mockReturnThis(),
-  get: jest.fn().mockResolvedValue({
-    docs: docs.map((d) => ({ id: d['id'] ?? 'vehicle-id', data: () => d })),
-  }),
-});
+const mockQuery = (docs: Record<string, any>[]) => {
+  const query: any = {
+    where: jest.fn(),
+    orderBy: jest.fn().mockReturnThis(),
+    startAfter: jest.fn().mockReturnThis(),
+    limit: jest.fn().mockReturnThis(),
+    get: jest.fn().mockResolvedValue({
+      docs: docs.map((d) => ({
+        id: d['id'] ?? 'vehicle-id',
+        data: () => d,
+        get: (field: string) => d[field],
+      })),
+    }),
+    count: jest.fn().mockReturnValue({
+      get: jest.fn().mockResolvedValue({ data: () => ({ count: docs.length }) }),
+    }),
+  };
+  query.where.mockReturnValue(query);
+  return query;
+};
 
 const mockFirebase = () => ({
   firestore: jest.fn().mockReturnValue({
@@ -142,6 +154,61 @@ describe('VehiclesService', () => {
       await expect(service.create(dto as any, adminUser)).rejects.toThrow(
         BadRequestException,
       );
+    });
+  });
+
+  // ── findAll() ──────────────────────────────────────────────────────────────
+  describe('findAll()', () => {
+    it('clientId aplica where() nativo en vez de traer todo a memoria', async () => {
+      const query = mockQuery([]);
+      firebase.firestore = jest.fn().mockReturnValue({
+        collection: jest.fn().mockReturnValue(query),
+      });
+
+      await service.findAll({ clientId: 'cliente-1' } as any, adminUser);
+
+      expect(query.where).toHaveBeenCalledWith('clientId', '==', 'cliente-1');
+      // Camino Firestore-side: usa count() + orderBy(), no un get() plano
+      // sobre toda la colección para filtrar clientId en memoria después.
+      expect(query.count).toHaveBeenCalled();
+      expect(query.orderBy).toHaveBeenCalledWith('statusChangedAt', 'desc');
+    });
+
+    it('chassis sigue exigiendo el camino en memoria (substring, no soportado por Firestore)', async () => {
+      const query = mockQuery([
+        { chassis: 'ABC123', id: 'v1' },
+        { chassis: 'XYZ999', id: 'v2' },
+      ]);
+      firebase.firestore = jest.fn().mockReturnValue({
+        collection: jest.fn().mockReturnValue(query),
+      });
+
+      const result = await service.findAll(
+        { chassis: 'abc' } as any,
+        adminUser,
+      );
+
+      expect(result.data).toHaveLength(1);
+      expect(result.data[0].chassis).toBe('ABC123');
+      // No debe intentar count() en el camino de memoria: ese branch calcula
+      // el total a partir del arreglo ya filtrado, no de un agregado.
+      expect(query.count).not.toHaveBeenCalled();
+    });
+
+    it('clientId + chassis combinados: el where() acota antes del filtro en memoria', async () => {
+      const query = mockQuery([
+        { chassis: 'ABC123', clientId: 'cliente-1', id: 'v1' },
+      ]);
+      firebase.firestore = jest.fn().mockReturnValue({
+        collection: jest.fn().mockReturnValue(query),
+      });
+
+      await service.findAll(
+        { chassis: 'abc', clientId: 'cliente-1' } as any,
+        adminUser,
+      );
+
+      expect(query.where).toHaveBeenCalledWith('clientId', '==', 'cliente-1');
     });
   });
 

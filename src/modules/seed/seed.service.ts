@@ -1,6 +1,11 @@
 import { Injectable, Logger, ForbiddenException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { v4 as uuidv4 } from 'uuid';
+import * as XLSX from 'xlsx';
 import { FirebaseService } from '../../firebase/firebase.service';
+import { TenantsService } from '../tenants/tenants.service';
+import { AuditService } from '../audit/audit.service';
+import { TenantContext } from '../../common/tenant/tenant-context';
 import { RoleEnum } from '../../common/enums/role.enum';
 import { SedeEnum } from '../../common/enums/sede.enum';
 import { VehicleStatus } from '../../common/enums/vehicle-status.enum';
@@ -9,8 +14,28 @@ import {
   AccessoryClassification,
 } from '../../common/enums/accessory-key.enum';
 import { PaymentMethod } from '../../common/enums/payment-method.enum';
-import { v4 as uuidv4 } from 'uuid';
-import * as XLSX from 'xlsx';
+import { runSeedPlatformOperation } from './seed-platform-context';
+import { SeedUsersRepository } from './seed-users.repository';
+import { CertificationsRepository } from '../certifications/certifications.repository';
+import {
+  AntennaType,
+  ImprintsStatus,
+  InstalledStatus,
+  RimsStatus,
+  SeatType,
+} from '../certifications/dto/create-certification.dto';
+import { DocumentationRepository } from '../documentation/documentation.repository';
+import { VehiclesRepository } from '../vehicles/vehicles.repository';
+import { ServiceOrdersRepository } from '../service-orders/service-orders.repository';
+import { AppointmentsRepository } from '../appointments/appointments.repository';
+import { DeliveryRepository } from '../delivery/delivery.repository';
+import { NotificationsRepository } from '../notifications/notifications.repository';
+import {
+  CATALOG_TYPES,
+  CatalogItem,
+  CatalogItemsRepository,
+  CatalogType,
+} from '../catalogs/catalogs.repository';
 
 interface SeedUser {
   displayName: string;
@@ -35,17 +60,46 @@ interface VehicleSeed {
   fechaEntrega?: Date; // fecha real de entrega desde Excel
 }
 
+/** Repositorio mínimo que necesita el borrado masivo por tenant — ver `clearScoped()`. */
+interface BulkDeletableRepository {
+  findAll(): Promise<{ id?: string }[]>;
+  delete(id: string): Promise<boolean>;
+}
+
 @Injectable()
 export class SeedService {
   private readonly logger = new Logger(SeedService.name);
 
+  /**
+   * Un `CatalogItemsRepository` por tipo de catálogo, construido a mano
+   * (mismo patrón que `catalogs.module.ts` — `collectionName` depende de
+   * `catalogType`, así que Nest no puede resolverlo con `useClass`). No hace
+   * falta declarar esto como provider de Nest: son instancias baratas
+   * (misma forma que cualquier `new Repositorio(firebase, audit)`) y viven
+   * solo dentro de este servicio.
+   */
+  private readonly catalogRepos: Record<CatalogType, CatalogItemsRepository>;
+
   constructor(
     private readonly firebase: FirebaseService,
     private readonly config: ConfigService,
-  ) {}
-
-  private get db() {
-    return this.firebase.firestore();
+    private readonly tenants: TenantsService,
+    private readonly audit: AuditService,
+    private readonly usersRepo: SeedUsersRepository,
+    private readonly certifications: CertificationsRepository,
+    private readonly documentations: DocumentationRepository,
+    private readonly vehicles: VehiclesRepository,
+    private readonly serviceOrders: ServiceOrdersRepository,
+    private readonly appointments: AppointmentsRepository,
+    private readonly deliveries: DeliveryRepository,
+    private readonly notifications: NotificationsRepository,
+  ) {
+    this.catalogRepos = Object.fromEntries(
+      CATALOG_TYPES.map((type) => [
+        type,
+        new CatalogItemsRepository(this.firebase, this.audit, type),
+      ]),
+    ) as Record<CatalogType, CatalogItemsRepository>;
   }
 
   // ──────────────────────────────────────────────────────────────────────
@@ -64,152 +118,147 @@ export class SeedService {
   // ──────────────────────────────────────────────────────────────────────
 
   /** Expuesto para el endpoint POST /seed/users — restaura solo el jefe de taller */
-  async runSeedUsers(secretKey: string): Promise<Record<string, unknown>> {
+  async runSeedUsers(
+    secretKey: string,
+    tenantId: string,
+  ): Promise<Record<string, unknown>> {
     this.validateSeedKey(secretKey);
 
-    const u: SeedUser = {
-      displayName: 'Carlos Mendoza',
-      email: 'jefe.taller@kiadealer.com',
-      password: 'KiaDealer2024!',
-      role: RoleEnum.JEFE_TALLER,
-      sede: SedeEnum.ALL,
-    };
+    return runSeedPlatformOperation(
+      { tenantId, reason: 'seed:restaurar-jefe-taller', tenants: this.tenants, audit: this.audit },
+      async () => {
+        const u: SeedUser = {
+          displayName: 'Carlos Mendoza',
+          email: 'jefe.taller@kiadealer.com',
+          password: 'KiaDealer2024!',
+          role: RoleEnum.JEFE_TALLER,
+          sede: SedeEnum.ALL,
+        };
 
-    try {
-      let userRecord: { uid: string };
-      let wasNew = false;
+        try {
+          const { uid: userUid, wasNew } = await this.upsertAuthUser(u);
+          await this.upsertUserDocument(userUid, u);
 
-      try {
-        userRecord = await this.firebase.auth().getUserByEmail(u.email);
-        this.logger.warn(`⏩ Usuario ya existe en Auth: ${u.email}`);
-      } catch (notFound: any) {
-        if (notFound?.code !== 'auth/user-not-found') throw notFound;
-        userRecord = await this.firebase.auth().createUser({
-          email: u.email,
-          displayName: u.displayName,
-          password: u.password,
-          emailVerified: true,
-        });
-        wasNew = true;
-      }
-
-      await this.firebase.auth().setCustomUserClaims(userRecord.uid, {
-        role: u.role,
-        sede: u.sede,
-        active: true,
-      });
-
-      const firestoreRef = this.db.collection('users').doc(userRecord.uid);
-      const firestoreSnap = await firestoreRef.get();
-      if (!firestoreSnap.exists) {
-        const now = this.firebase.serverTimestamp();
-        await firestoreRef.set({
-          uid: userRecord.uid,
-          displayName: u.displayName,
-          email: u.email,
-          role: u.role,
-          sede: u.sede,
-          active: true,
-          fcmTokens: [],
-          createdAt: now,
-          updatedAt: now,
-          createdBy: 'seed',
-        });
-      }
-
-      this.logger.log(
-        wasNew
-          ? `👤 Jefe de taller creado: ${u.email}`
-          : `⏩ Jefe de taller ya existía: ${u.email}`,
-      );
-      return {
-        created: wasNew,
-        email: u.email,
-        role: u.role,
-        uid: userRecord.uid,
-      };
-    } catch (err: any) {
-      this.logger.error(`❌ Error restaurando jefe de taller: ${err.message}`);
-      throw err;
-    }
+          this.logger.log(
+            wasNew
+              ? `👤 Jefe de taller creado: ${u.email}`
+              : `⏩ Jefe de taller ya existía: ${u.email}`,
+          );
+          return {
+            created: wasNew,
+            email: u.email,
+            role: u.role,
+            uid: userUid,
+          };
+        } catch (err: any) {
+          this.logger.error(
+            `❌ Error restaurando jefe de taller: ${err.message}`,
+          );
+          throw err;
+        }
+      },
+    );
   }
 
   async runSeed(
     secretKey: string,
+    tenantId: string,
     options: { clear?: boolean } = {},
   ): Promise<Record<string, unknown>> {
     this.validateSeedKey(secretKey);
 
-    this.logger.log('🌱 Iniciando proceso de seed...');
+    return runSeedPlatformOperation(
+      { tenantId, reason: 'seed:run', tenants: this.tenants, audit: this.audit },
+      async () => {
+        this.logger.log('🌱 Iniciando proceso de seed...');
 
-    const results: Record<string, unknown> = {};
+        const results: Record<string, unknown> = {};
 
-    if (options.clear) {
-      await this.clearCollections();
-      results['cleared'] = true;
-    }
+        if (options.clear) {
+          await this.clearCollections();
+          results['cleared'] = true;
+        }
 
-    results['catalogs'] = await this.seedCatalogs();
+        results['catalogs'] = await this.seedCatalogs();
 
-    this.logger.log(
-      '✅ Seed completado con éxito — catálogos listos. Usa /seed/from-excel para importar vehículos.',
+        this.logger.log(
+          '✅ Seed completado con éxito — catálogos listos. Usa /seed/from-excel para importar vehículos.',
+        );
+        return results;
+      },
     );
-    return results;
   }
 
   // ──────────────────────────────────────────────────────────────────────
-  // CLEAR (solo dev)
+  // CLEAR (solo dev) — borrado masivo, SIEMPRE acotado al tenant activo
   // ──────────────────────────────────────────────────────────────────────
+  //
+  // La versión pre-migración iteraba nombres de colección con
+  // `this.db.collection(col).limit(500).get()`: sin NINGÚN filtro de
+  // tenant. Sobre una base multi-tenant eso borra la colección entera de
+  // TODOS los concesionarios, no solo el que pidió la limpieza — el peor
+  // escenario posible para un endpoint de "borrar datos de demo".
+  //
+  // Acá cada colección se limpia a través de SU repositorio ya migrado.
+  // `findAll()` usa `scopedQuery()` internamente (`where('tenantId','==',
+  // ctx.tenantId)`), así que es ESTRUCTURALMENTE imposible traer documentos
+  // de otro tenant — no depende de que quien escribe este método se acuerde
+  // de agregar el where. El contexto lo abre `runSeedPlatformOperation`
+  // antes de llegar acá con el `tenantId` explícito del request. Ver
+  // seed.service.spec.ts → 'borrado masivo no cruza tenants'.
   private async clearCollections(): Promise<void> {
-    const collections = [
-      'vehicles',
-      'documentations',
-      'certifications',
-      'service-orders',
-      'appointments',
-      'deliveryCeremonies',
-      'notifications',
-    ];
-    const catalogSubcollections = [
-      'colors',
-      'models',
-      'concessionaires',
-      'accessories',
-      'sedes',
-    ];
-
-    for (const col of collections) {
-      try {
-        const snap = await this.db.collection(col).limit(500).get();
-        if (!snap.empty) {
-          const batch = this.db.batch();
-          snap.docs.forEach((d) => batch.delete(d.ref));
-          await batch.commit();
-        }
-      } catch (e: any) {
-        this.logger.warn(`No se pudo limpiar '${col}': ${e.message}`);
-      }
+    try {
+      // vehicles usa deleteManyWithHistory: además del vehículo, limpia su
+      // subcolección statusHistory — algo que el loop original NUNCA hacía
+      // (una subcolección no aparece en `.collection('vehicles').get()`),
+      // dejando historiales huérfanos en cada reset. Mejora de comportamiento,
+      // no solo de scoping.
+      const vehicleIds = (await this.vehicles.findAll())
+        .slice(0, 500)
+        .map((v) => v.id as string);
+      await this.vehicles.deleteManyWithHistory(vehicleIds);
+    } catch (e: any) {
+      this.logger.warn(`No se pudo limpiar 'vehicles': ${e.message}`);
     }
 
-    for (const sub of catalogSubcollections) {
-      try {
-        const snap = await this.db
-          .collection('catalogs')
-          .doc(sub)
-          .collection('items')
-          .limit(500)
-          .get();
-        if (!snap.empty) {
-          const batch = this.db.batch();
-          snap.docs.forEach((d) => batch.delete(d.ref));
-          await batch.commit();
-        }
-      } catch (e: any) {
-        this.logger.warn(`No se pudo limpiar catálogo '${sub}': ${e.message}`);
-      }
+    await this.clearScoped(this.documentations, 'documentations');
+    await this.clearScoped(this.certifications, 'certifications');
+    await this.clearScoped(this.serviceOrders, 'service-orders');
+    await this.clearScoped(this.appointments, 'appointments');
+    await this.clearScoped(this.deliveries, 'deliveryCeremonies');
+
+    try {
+      const notifs = (await this.notifications.findAll()).slice(0, 500);
+      await this.notifications.deleteBatch(
+        notifs.map((n) => n.id as string),
+      );
+    } catch (e: any) {
+      this.logger.warn(`No se pudo limpiar 'notifications': ${e.message}`);
     }
 
-    this.logger.log('🗑️  Colecciones limpiadas');
+    for (const type of CATALOG_TYPES) {
+      await this.clearScoped(this.catalogRepos[type], `catalogs/${type}/items`);
+    }
+
+    this.logger.log('🗑️  Colecciones limpiadas (solo del concesionario activo)');
+  }
+
+  /**
+   * Borra hasta 500 documentos de `repo`, todos ya acotados al tenant activo
+   * por `findAll()`. `delete()` además reverifica pertenencia documento por
+   * documento (vía `findById` dentro de la base) antes de escribir — doble
+   * chequeo, no solo el de la query.
+   */
+  private async clearScoped(
+    repo: BulkDeletableRepository,
+    label: string,
+  ): Promise<void> {
+    try {
+      const docs = (await repo.findAll()).slice(0, 500);
+      await Promise.all(docs.map((d) => repo.delete(d.id as string)));
+    } catch (e: any) {
+      this.logger.warn(`No se pudo limpiar '${label}': ${e.message}`);
+    }
   }
 
   // ──────────────────────────────────────────────────────────────────────
@@ -326,15 +375,25 @@ export class SeedService {
   }
 
   /**
-   * Upsert de items de catálogo usando IDs deterministas (slug del nombre).
-   * Normaliza `name` a MAYÚSCULAS igual que CatalogsService.create().
-   * Crea el documento si no existe, actualiza los campos si ya existe.
-   * Nunca borra datos existentes.
+   * Upsert de items de catálogo vía `CatalogItemsRepository` (repositorio ya
+   * migrado de `catalogs`, inyectado — no un acceso nuevo).
+   *
+   * El id determinístico replica `buildItemId()` de `CatalogItemsRepository`
+   * (`{tenantId}__{slug}`, privado en ese repositorio): la subcolección
+   * `catalogs/{tipo}/items` es compartida entre TODOS los concesionarios (ver
+   * el comentario de esa clase), así que sin el prefijo dos tenants que
+   * siembren el mismo nombre ("BLANCO PERLA") pisarían el mismo documento.
+   * Se recalcula acá en vez de llamar a `createItem()`/`updateItem()` porque
+   * esos métodos no son idempotentes de por sí (`createItem` lanza
+   * `ConflictException` si el id ya existe) — acá usamos directamente
+   * `exists()` + `create()`/`update()` de la base, que sí lo son.
    */
   private async bulkUpsertCatalog(
-    subcollection: string,
+    catalogType: CatalogType,
     items: Record<string, unknown>[],
   ): Promise<{ created: number; updated: number }> {
+    const repo = this.catalogRepos[catalogType];
+    const { tenantId } = TenantContext.getOrThrow();
     const CODE_FIELDS = new Set(['key', 'code']);
     let created = 0;
     let updated = 0;
@@ -352,35 +411,30 @@ export class SeedService {
         ]),
       );
 
-      const id = this.toSlugId(normalized['name'] as string);
-      const ref = this.db
-        .collection('catalogs')
-        .doc(subcollection)
-        .collection('items')
-        .doc(id);
-      const snap = await ref.get();
+      const id = `${tenantId}__${this.toSlugId(normalized['name'] as string)}`;
+      const exists = await repo.exists(id);
 
-      if (!snap.exists) {
-        await ref.set({
+      if (!exists) {
+        await repo.create(
+          {
+            ...normalized,
+            createdAt: this.firebase.serverTimestamp(),
+          } as unknown as Omit<CatalogItem, 'tenantId' | 'id'>,
           id,
-          ...normalized,
-          createdAt: this.firebase.serverTimestamp(),
-        });
+        );
         created++;
       } else {
         // Actualizar todos los campos excepto createdAt (preservar fecha original)
-        const { createdAt: _skip, ...updateFields } = normalized as any;
-        await ref.update({
-          id,
-          ...updateFields,
+        await repo.update(id, {
+          ...normalized,
           updatedAt: this.firebase.serverTimestamp(),
-        });
+        } as unknown as Partial<Omit<CatalogItem, 'tenantId' | 'id'>>);
         updated++;
       }
     }
 
     this.logger.log(
-      `  [${subcollection}] ${created} creados, ${updated} actualizados`,
+      `  [${catalogType}] ${created} creados, ${updated} actualizados`,
     );
     return { created, updated };
   }
@@ -388,6 +442,13 @@ export class SeedService {
   // ──────────────────────────────────────────────────────────────────────
   // USERS
   // ──────────────────────────────────────────────────────────────────────
+  //
+  // NOTA — `seedUsers()` (el roster completo de 16 usuarios de demo) no está
+  // invocado por NINGÚN endpoint hoy: ni `runSeed()` ni ningún handler del
+  // controller lo llaman (verificado — ya era así antes de esta migración,
+  // no es una regresión introducida acá). Se migra igual, por consistencia y
+  // para que compile sin `firestore()` directo, pero queda como candidato a
+  // limpieza aparte: o se conecta a algún endpoint, o se borra.
   private async seedUsers(): Promise<{
     created: number;
     skipped: number;
@@ -519,54 +580,16 @@ export class SeedService {
 
     for (const u of seedUsers) {
       try {
-        let userRecord: { uid: string };
-        let wasNew = false;
-
-        try {
-          userRecord = await this.firebase.auth().getUserByEmail(u.email);
-          this.logger.warn(`⏩ Usuario ya existe en Auth: ${u.email}`);
-        } catch (notFound: any) {
-          if (notFound?.code !== 'auth/user-not-found') throw notFound;
-          userRecord = await this.firebase.auth().createUser({
-            email: u.email,
-            displayName: u.displayName,
-            password: u.password,
-            emailVerified: true,
-          });
-          wasNew = true;
-        }
-
-        await this.firebase.auth().setCustomUserClaims(userRecord.uid, {
-          role: u.role,
-          sede: u.sede,
-          active: true,
-        });
-
-        const firestoreRef = this.db.collection('users').doc(userRecord.uid);
-        const firestoreSnap = await firestoreRef.get();
-        if (!firestoreSnap.exists) {
-          const now = this.firebase.serverTimestamp();
-          await firestoreRef.set({
-            uid: userRecord.uid,
-            displayName: u.displayName,
-            email: u.email,
-            role: u.role,
-            sede: u.sede,
-            active: true,
-            fcmTokens: [],
-            createdAt: now,
-            updatedAt: now,
-            createdBy: 'seed',
-          });
-        }
+        const { uid: userUid, wasNew } = await this.upsertAuthUser(u);
+        await this.upsertUserDocument(userUid, u);
 
         if (u.role === RoleEnum.JEFE_TALLER) {
-          this._jefeTallerUid = userRecord.uid;
+          this._jefeTallerUid = userUid;
         }
 
         if (wasNew) {
           createdUsers.push({
-            uid: userRecord.uid,
+            uid: userUid,
             email: u.email,
             role: u.role,
             sede: u.sede,
@@ -588,6 +611,73 @@ export class SeedService {
     return { created, skipped, users: createdUsers };
   }
 
+  /**
+   * Crea (o recupera) el usuario en Firebase Auth y le asigna los custom
+   * claims, incluido `tenantId` — el propio del contexto activo, abierto por
+   * `runSeedPlatformOperation` antes de que cualquier caller llegue acá.
+   *
+   * CAMBIO DE COMPORTAMIENTO deliberado respecto al código pre-migración:
+   * antes los claims NUNCA incluían `tenantId` (no existía el concepto). Sin
+   * él, un usuario "sembrado" por este endpoint quedaría bloqueado con 401 de
+   * `TenantGuard` en cuanto el guard esté registrado (ver runbook paso 5) —
+   * el seeder dejaría de poder crear usuarios utilizables. Firebase Auth es
+   * global (no tiene noción de tenant), así que esta llamada vive fuera de
+   * cualquier repositorio — mismo criterio documentado en
+   * `UsersService.create()`.
+   */
+  private async upsertAuthUser(
+    u: SeedUser,
+  ): Promise<{ uid: string; wasNew: boolean }> {
+    const { tenantId } = TenantContext.getOrThrow();
+    let userRecord: { uid: string };
+    let wasNew = false;
+
+    try {
+      userRecord = await this.firebase.auth().getUserByEmail(u.email);
+      this.logger.warn(`⏩ Usuario ya existe en Auth: ${u.email}`);
+    } catch (notFound: any) {
+      if (notFound?.code !== 'auth/user-not-found') throw notFound;
+      userRecord = await this.firebase.auth().createUser({
+        email: u.email,
+        displayName: u.displayName,
+        password: u.password,
+        emailVerified: true,
+      });
+      wasNew = true;
+    }
+
+    await this.firebase.auth().setCustomUserClaims(userRecord.uid, {
+      role: u.role,
+      sede: u.sede,
+      active: true,
+      tenantId,
+    });
+
+    return { uid: userRecord.uid, wasNew };
+  }
+
+  /** Crea el documento `users/{uid}` si todavía no existe, vía `SeedUsersRepository`. */
+  private async upsertUserDocument(uid: string, u: SeedUser): Promise<void> {
+    if (await this.usersRepo.exists(uid)) return;
+
+    const now = this.firebase.serverTimestamp();
+    await this.usersRepo.create(
+      {
+        uid,
+        displayName: u.displayName,
+        email: u.email,
+        role: u.role,
+        sede: u.sede,
+        active: true,
+        fcmTokens: [],
+        createdAt: now,
+        updatedAt: now,
+        createdBy: 'seed',
+      },
+      uid,
+    );
+  }
+
   /** UID del jefe de taller resuelto durante seedUsers */
   private _jefeTallerUid = 'seed-system';
 
@@ -606,9 +696,10 @@ export class SeedService {
     const createdVehicles: unknown[] = [];
 
     for (const v of seeds) {
-      // Buscar por chasis para idempotencia + posible fix de certificación
-      const chassisSnap = await this.db
-        .collection('vehicles')
+      // Buscar por chasis para idempotencia + posible fix de certificación.
+      // vehicles.query() ya viene acotado al tenant activo.
+      const chassisSnap = await this.vehicles
+        .query()
         .where('chassis', '==', v.vin)
         .limit(1)
         .get();
@@ -634,69 +725,75 @@ export class SeedService {
       }
 
       const vehicleId = uuidv4();
-      const ref = this.db.collection('vehicles').doc(vehicleId);
       const ts = this.firebase.serverTimestamp();
 
       // Fecha de entrega: usa la real del Excel si viene, si no el timestamp actual
       const finalDeliveryDate: unknown =
         v.fechaEntrega instanceof Date ? v.fechaEntrega : ts;
 
-      await ref.set({
-        id: vehicleId,
-        chassis: v.vin,
-        model: v.model,
-        year: v.year,
-        color: v.color,
-        originConcessionaire: v.originConcessionaire,
-        photoUrl: null,
-        sede: v.sede,
-        status: v.status,
-        // Datos del cliente precargados desde Excel para pre-rellenar el formulario de documentación
-        clientName: v.clientName ?? null,
-        clientId: v.clientId ?? null,
-        clientPhone: v.clientPhone ?? null,
-        paymentMethod: v.paymentMethod ?? PaymentMethod.CREDITO,
-        receptionDate: ts,
-        certificationDate: this.isAfterStatus(
-          v.status,
-          VehicleStatus.DOCUMENTADO,
-        )
-          ? ts
-          : null,
-        documentationDate: this.isAfterStatus(
-          v.status,
-          VehicleStatus.ENVIADO_A_MATRICULAR,
-        )
-          ? ts
-          : null,
-        installationCompleteDate: this.isAfterStatus(
-          v.status,
-          VehicleStatus.CERTIFICADO_STOCK,
-        )
-          ? ts
-          : null,
-        deliveryDate:
-          v.status === VehicleStatus.ENTREGADO ? finalDeliveryDate : null,
-        receivedBy: jefeTallerUid,
-        certifiedBy: this.isAfterStatus(v.status, VehicleStatus.DOCUMENTADO)
-          ? jefeTallerUid
-          : null,
-        documentedBy: this.isAfterStatus(
-          v.status,
-          VehicleStatus.ENVIADO_A_MATRICULAR,
-        )
-          ? jefeTallerUid
-          : null,
-        installedBy: this.isAfterStatus(v.status, VehicleStatus.EN_INSTALACION)
-          ? jefeTallerUid
-          : null,
-        deliveredBy:
-          v.status === VehicleStatus.ENTREGADO ? jefeTallerUid : null,
-        createdAt: ts,
-        updatedAt: ts,
-      } as Record<string, unknown>);
+      await this.vehicles.create(
+        {
+          id: vehicleId,
+          chassis: v.vin,
+          model: v.model,
+          year: v.year,
+          color: v.color,
+          originConcessionaire: v.originConcessionaire,
+          photoUrl: null,
+          sede: v.sede,
+          status: v.status,
+          // Datos del cliente precargados desde Excel para pre-rellenar el formulario de documentación
+          clientName: v.clientName ?? null,
+          clientId: v.clientId ?? null,
+          clientPhone: v.clientPhone ?? null,
+          paymentMethod: v.paymentMethod ?? PaymentMethod.CREDITO,
+          receptionDate: ts,
+          certificationDate: this.isAfterStatus(
+            v.status,
+            VehicleStatus.DOCUMENTADO,
+          )
+            ? ts
+            : null,
+          documentationDate: this.isAfterStatus(
+            v.status,
+            VehicleStatus.ENVIADO_A_MATRICULAR,
+          )
+            ? ts
+            : null,
+          installationCompleteDate: this.isAfterStatus(
+            v.status,
+            VehicleStatus.CERTIFICADO_STOCK,
+          )
+            ? ts
+            : null,
+          deliveryDate:
+            v.status === VehicleStatus.ENTREGADO ? finalDeliveryDate : null,
+          receivedBy: jefeTallerUid,
+          certifiedBy: this.isAfterStatus(v.status, VehicleStatus.DOCUMENTADO)
+            ? jefeTallerUid
+            : null,
+          documentedBy: this.isAfterStatus(
+            v.status,
+            VehicleStatus.ENVIADO_A_MATRICULAR,
+          )
+            ? jefeTallerUid
+            : null,
+          installedBy: this.isAfterStatus(
+            v.status,
+            VehicleStatus.EN_INSTALACION,
+          )
+            ? jefeTallerUid
+            : null,
+          deliveredBy:
+            v.status === VehicleStatus.ENTREGADO ? jefeTallerUid : null,
+          createdAt: ts,
+          updatedAt: ts,
+        },
+        vehicleId,
+      );
 
-      await ref.collection('statusHistory').add({
+      await this.vehicles.addStatusHistory(vehicleId, {
+        status: v.status,
         previousStatus: null,
         newStatus: v.status,
         changedBy: jefeTallerUid,
@@ -708,7 +805,7 @@ export class SeedService {
 
       // Certificación
       if (this.isFromStatus(v.status, VehicleStatus.CERTIFICADO_STOCK)) {
-        await this.seedCertification(vehicleId, v, jefeTallerUid);
+        await this.seedCertification(vehicleId, jefeTallerUid);
       }
 
       // Documentación
@@ -728,7 +825,7 @@ export class SeedService {
 
       // Entrega
       if (v.status === VehicleStatus.ENTREGADO) {
-        await this.seedDelivery(vehicleId, v, jefeTallerUid);
+        await this.seedDelivery(vehicleId, jefeTallerUid);
       }
 
       createdVehicles.push({
@@ -746,55 +843,46 @@ export class SeedService {
   }
 
   // ──────────────────────────────────────────────────────────────────────
-  // CERTIFICATIONS
+  // CERTIFICATIONS — vía CertificationsRepository (ya migrado, inyectado)
   // ──────────────────────────────────────────────────────────────────────
   private async seedCertification(
     vehicleId: string,
-    vehicle: VehicleSeed,
     byUid: string,
   ): Promise<void> {
-    const existing = await this.db
-      .collection('certifications')
-      .doc(vehicleId)
-      .get();
-    if (existing.exists) return;
+    if (await this.certifications.exists(vehicleId)) return;
 
     const ts = this.firebase.serverTimestamp();
-    await this.db
-      .collection('certifications')
-      .doc(vehicleId)
-      .set({
+    await this.certifications.create(
+      {
         vehicleId,
         // Checklist técnico — estructura idéntica a certifications.service.ts
-        radio: 'INSTALADO',
+        radio: InstalledStatus.INSTALADO,
         rims: {
-          status: 'BUENOS',
+          status: RimsStatus.BUENOS,
           photoUrl: null,
         },
-        seatType: 'CUERO',
-        antenna: 'TIBURON',
-        trunkCover: 'INSTALADO',
+        seatType: SeatType.CUERO,
+        antenna: AntennaType.TIBURON,
+        trunkCover: InstalledStatus.INSTALADO,
         mileage: 3,
-        imprints: 'CON_IMPRONTAS',
+        imprints: ImprintsStatus.CON_IMPRONTAS,
         notes: null,
         certifiedAt: ts,
         certifiedBy: byUid,
-      });
+      },
+      vehicleId,
+    );
   }
 
   // ──────────────────────────────────────────────────────────────────────
-  // DOCUMENTATION
+  // DOCUMENTATION — vía DocumentationRepository (ya migrado, inyectado)
   // ──────────────────────────────────────────────────────────────────────
   private async seedDocumentation(
     vehicleId: string,
     vehicle: VehicleSeed,
     byUid: string,
   ): Promise<void> {
-    const existing = await this.db
-      .collection('documentations')
-      .doc(vehicleId)
-      .get();
-    if (existing.exists) return;
+    if (await this.documentations.exists(vehicleId)) return;
 
     const accessories = Object.values(AccessoryKey).map((key) => ({
       key,
@@ -802,10 +890,8 @@ export class SeedService {
     }));
 
     const ts = this.firebase.serverTimestamp();
-    await this.db
-      .collection('documentations')
-      .doc(vehicleId)
-      .set({
+    await this.documentations.create(
+      {
         vehicleId,
         // Campos idénticos a documentation.service.ts → create()
         clientName: vehicle.clientName,
@@ -816,6 +902,11 @@ export class SeedService {
         vehicleInvoiceUrl: null,
         giftEmailUrl: null,
         accessoryInvoiceUrl: null,
+        // Retrocompat: DocumentationRepository espera también los arrays —
+        // ver el comentario de DocumentationDocument en documentation.repository.ts.
+        giftEmailUrls: [],
+        accessoryInvoiceUrls: [],
+        registrationReceivedDate: null,
         accessories,
         documentationStatus: 'COMPLETO',
         documentedAt: ts,
@@ -823,19 +914,21 @@ export class SeedService {
         // paymentMethod viene del vehículo (Excel lo sobreescribe; default: CREDITO)
         createdAt: ts,
         updatedAt: ts,
-      });
+      },
+      vehicleId,
+    );
   }
 
   // ──────────────────────────────────────────────────────────────────────
-  // SERVICE ORDERS
+  // SERVICE ORDERS — vía ServiceOrdersRepository (ya migrado, inyectado)
   // ──────────────────────────────────────────────────────────────────────
   private async seedServiceOrder(
     vehicleId: string,
     vehicle: VehicleSeed,
     byUid: string,
   ): Promise<void> {
-    const existing = await this.db
-      .collection('service-orders')
+    const existing = await this.serviceOrders
+      .query()
       .where('vehicleId', '==', vehicleId)
       .limit(1)
       .get();
@@ -857,11 +950,8 @@ export class SeedService {
       VehicleStatus.INSTALACION_COMPLETA,
     );
 
-    await this.db
-      .collection('service-orders')
-      .doc(orderId)
-      .set({
-        id: orderId,
+    await this.serviceOrders.create(
+      {
         orderNumber,
         vehicleId,
         sede: vehicle.sede,
@@ -882,83 +972,86 @@ export class SeedService {
         createdByName: 'Carlos Mendoza',
         createdAt: ts,
         updatedAt: ts,
-      });
+      },
+      orderId,
+    );
   }
 
   // ──────────────────────────────────────────────────────────────────────
-  // APPOINTMENTS
+  // APPOINTMENTS — vía AppointmentsRepository (ya migrado, inyectado)
   // ──────────────────────────────────────────────────────────────────────
   private async seedAppointment(
     vehicleId: string,
     vehicle: VehicleSeed,
     byUid: string,
   ): Promise<void> {
-    const existing = await this.db
-      .collection('appointments')
-      .where('vehicleId', '==', vehicleId)
-      .limit(1)
-      .get();
-    if (!existing.empty) return;
+    // countFiltered() en vez de listAll(): evita depender de un índice
+    // compuesto (tenantId==, vehicleId==, orderBy scheduledDate/scheduledTime)
+    // solo para chequear existencia.
+    const existingCount = await this.appointments.countFiltered({
+      vehicleId,
+    });
+    if (existingCount > 0) return;
 
     // ID UUID igual que appointments.service.ts → create()
     const appointmentId = uuidv4();
     const ts = this.firebase.serverTimestamp();
 
-    await this.db.collection('appointments').doc(appointmentId).set({
-      id: appointmentId,
-      vehicleId,
-      chassis: vehicle.vin,
-      model: vehicle.model,
-      sede: vehicle.sede,
-      scheduledDate: '2026-03-15',
-      scheduledTime: '10:00',
-      assignedAdvisorId: byUid,
-      assignedAdvisorName: 'María Torres',
-      status: 'AGENDADO',
-      createdBy: byUid,
-      createdByName: 'Carlos Mendoza',
-      createdAt: ts,
-      updatedAt: ts,
-    });
+    await this.appointments.create(
+      {
+        vehicleId,
+        chassis: vehicle.vin,
+        model: vehicle.model,
+        color: vehicle.color ?? null,
+        sede: vehicle.sede,
+        clientName: vehicle.clientName ?? null,
+        clientId: vehicle.clientId ?? null,
+        scheduledDate: '2026-03-15',
+        scheduledTime: '10:00',
+        assignedAdvisorId: byUid,
+        assignedAdvisorName: 'María Torres',
+        status: 'AGENDADO',
+        createdBy: byUid,
+        createdByName: 'Carlos Mendoza',
+        createdAt: ts,
+        updatedAt: ts,
+      },
+      appointmentId,
+    );
 
     // Guardar appointmentId para consulta posterior (entrega)
     this._lastAppointmentId.set(vehicleId, appointmentId);
   }
 
   // ──────────────────────────────────────────────────────────────────────
-  // DELIVERIES
+  // DELIVERIES — vía DeliveryRepository (ya migrado, inyectado)
   // ──────────────────────────────────────────────────────────────────────
-  private async seedDelivery(
-    vehicleId: string,
-    vehicle: VehicleSeed,
-    byUid: string,
-  ): Promise<void> {
+  private async seedDelivery(vehicleId: string, byUid: string): Promise<void> {
     // Colección y esquema idénticos a delivery.service.ts → createCeremony()
-    const existing = await this.db
-      .collection('deliveryCeremonies')
-      .doc(vehicleId)
-      .get();
-    if (existing.exists) return;
+    if (await this.deliveries.exists(vehicleId)) return;
 
     // Usar el appointmentId UUID generado en seedAppointment
     const appointmentId =
       this._lastAppointmentId.get(vehicleId) ?? `fallback-apt-${vehicleId}`;
     const ts = this.firebase.serverTimestamp();
 
-    await this.db.collection('deliveryCeremonies').doc(vehicleId).set({
+    await this.deliveries.create(
+      {
+        vehicleId,
+        appointmentId,
+        deliveryPhotoUrl: null,
+        signedActaUrl: null,
+        clientComment: 'Cliente totalmente satisfecho con la entrega.',
+        deliveredBy: byUid,
+        deliveredByName: 'Carlos Mendoza',
+        createdAt: ts,
+      },
       vehicleId,
-      appointmentId,
-      deliveryPhotoUrl: null,
-      signedActaUrl: null,
-      clientComment: 'Cliente totalmente satisfecho con la entrega.',
-      deliveredBy: byUid,
-      deliveredByName: 'Carlos Mendoza',
-      createdAt: ts,
-    });
+    );
 
     // Marcar agendamiento como ENTREGADO (igual que delivery.service.ts)
     if (appointmentId && !appointmentId.startsWith('fallback-')) {
-      await this.db.collection('appointments').doc(appointmentId).update({
+      await this.appointments.update(appointmentId, {
         status: 'ENTREGADO',
         updatedAt: ts,
       });
@@ -975,15 +1068,13 @@ export class SeedService {
     vehicleId: string,
     chassis: string,
   ): Promise<void> {
-    const certRef = this.db.collection('certifications').doc(vehicleId);
-    const certSnap = await certRef.get();
+    const deleted = await this.certifications.delete(vehicleId);
 
-    if (!certSnap.exists) {
+    if (!deleted) {
       this.logger.log(`  ℹ️  Sin certificación que eliminar: ${chassis}`);
       return;
     }
 
-    await certRef.delete();
     this.logger.log(
       `  ✅ ${chassis} — certificación falsa eliminada, listo para certificar`,
     );
@@ -1091,6 +1182,10 @@ export class SeedService {
   /**
    * Inspección de diagnóstico: devuelve columnas encontradas y las 3 primeras filas
    * sin insertar nada en Firestore.
+   *
+   * NO recibe `tenantId` ni pasa por `runSeedPlatformOperation`: no toca
+   * Firestore en absoluto (solo parsea el buffer en memoria), así que no hay
+   * ningún tenant que resolver — ver seed-platform-context.ts.
    */
   async inspectFile(
     buffer: Buffer,
@@ -1125,17 +1220,14 @@ export class SeedService {
     buffer: Buffer,
     mimetype: string,
     secretKey: string,
+    tenantId: string,
     options: { clear?: boolean } = {},
   ): Promise<{ created: number; vehicles: unknown[]; skippedRows: number }> {
     this.validateSeedKey(secretKey);
 
-    if (options.clear) {
-      this.logger.log(
-        '🗑️  Limpiando colecciones anteriores antes del import...',
-      );
-      await this.clearCollections();
-    }
-
+    // El parseo del archivo no toca Firestore — se hace fuera del contexto
+    // de tenant, igual que inspectFile(). Solo la escritura (más abajo)
+    // necesita el contexto abierto.
     const rows = this.parseBuffer(buffer, mimetype);
     this.logger.log(`📊 Filas totales leídas: ${rows.length}`);
 
@@ -1300,8 +1392,20 @@ export class SeedService {
       `🚗 Vehículos a procesar: ${vehicles.length} (${skippedRows} filas sin chasis omitidas)`,
     );
 
-    const result = await this.executeVehicleSeeding(vehicles);
-    return { ...result, skippedRows };
+    return runSeedPlatformOperation(
+      { tenantId, reason: 'seed:from-excel', tenants: this.tenants, audit: this.audit },
+      async () => {
+        if (options.clear) {
+          this.logger.log(
+            '🗑️  Limpiando colecciones anteriores antes del import...',
+          );
+          await this.clearCollections();
+        }
+
+        const result = await this.executeVehicleSeeding(vehicles);
+        return { ...result, skippedRows };
+      },
+    );
   }
 
   /** Mapea el nombre del concesionario del Excel a SedeEnum */
@@ -1324,103 +1428,112 @@ export class SeedService {
   // ──────────────────────────────────────────────────────────────────────
   async resetToPorArribar(
     secretKey: string,
+    tenantId: string,
   ): Promise<{ total: number; reset: number; details: unknown[] }> {
     this.validateSeedKey(secretKey);
 
-    // Buscar todos los vehículos en CERTIFICADO_STOCK
-    const snap = await this.db
-      .collection('vehicles')
-      .where('status', '==', VehicleStatus.CERTIFICADO_STOCK)
-      .get();
+    return runSeedPlatformOperation(
+      {
+        tenantId,
+        reason: 'seed:reset-to-por-arribar',
+        tenants: this.tenants,
+        audit: this.audit,
+      },
+      async () => {
+        // Buscar todos los vehículos en CERTIFICADO_STOCK — query() ya viene
+        // acotado al tenant activo.
+        const snap = await this.vehicles
+          .query()
+          .where('status', '==', VehicleStatus.CERTIFICADO_STOCK)
+          .get();
 
-    if (snap.empty) {
-      this.logger.log('✅ No hay vehículos en CERTIFICADO_STOCK para resetear');
-      return { total: 0, reset: 0, details: [] };
-    }
-
-    const details: unknown[] = [];
-    let reset = 0;
-
-    for (const doc of snap.docs) {
-      const vehicle = doc.data();
-      const vehicleId = doc.id;
-      const chassis = vehicle['chassis'];
-
-      try {
-        // 1. Eliminar certificación si existe
-        const certRef = this.db.collection('certifications').doc(vehicleId);
-        const certSnap = await certRef.get();
-        if (certSnap.exists) {
-          await certRef.delete();
-          this.logger.log(`  🗑️  Certificación eliminada: ${chassis}`);
+        if (snap.empty) {
+          this.logger.log(
+            '✅ No hay vehículos en CERTIFICADO_STOCK para resetear',
+          );
+          return { total: 0, reset: 0, details: [] };
         }
 
-        // 2. Eliminar documentación si existe
-        const docRef = this.db.collection('documentations').doc(vehicleId);
-        const docSnap = await docRef.get();
-        if (docSnap.exists) {
-          await docRef.delete();
-          this.logger.log(`  🗑️  Documentación eliminada: ${chassis}`);
+        const details: unknown[] = [];
+        let reset = 0;
+
+        for (const doc of snap.docs) {
+          const vehicle = doc.data();
+          const vehicleId = doc.id;
+          const chassis = vehicle['chassis'];
+
+          try {
+            // 1. Eliminar certificación si existe
+            const certDeleted = await this.certifications.delete(vehicleId);
+            if (certDeleted) {
+              this.logger.log(`  🗑️  Certificación eliminada: ${chassis}`);
+            }
+
+            // 2. Eliminar documentación si existe
+            const docDeleted = await this.documentations.delete(vehicleId);
+            if (docDeleted) {
+              this.logger.log(`  🗑️  Documentación eliminada: ${chassis}`);
+            }
+
+            // 3. Resetear campos del vehículo a estado POR_ARRIBAR
+            const ts = this.firebase.serverTimestamp();
+            await this.vehicles.update(vehicleId, {
+              status: VehicleStatus.POR_ARRIBAR,
+              registrationSentDate: null,
+              registrationReceivedDate: null,
+              receptionDate: null,
+              certificationDate: null,
+              certifiedBy: null,
+              documentationDate: null,
+              documentedBy: null,
+              installationCompleteDate: null,
+              installedBy: null,
+              deliveryDate: null,
+              deliveredBy: null,
+              originConcessionaire: null,
+              photoUrl: null,
+              updatedAt: ts,
+            });
+
+            // 4. Registrar en historial. addStatusHistory() genera el id del
+            // documento automáticamente (a diferencia del código original,
+            // que fijaba un uuid propio) — nada lee ese id, así que no hay
+            // cambio de comportamiento observable.
+            await this.vehicles.addStatusHistory(vehicleId, {
+              status: VehicleStatus.POR_ARRIBAR,
+              previousStatus: VehicleStatus.CERTIFICADO_STOCK,
+              newStatus: VehicleStatus.POR_ARRIBAR,
+              changedBy: 'seed-system',
+              changedByName: 'Seed Reset',
+              changedAt: ts,
+              sede: vehicle['sede'],
+              notes: 'Reset masivo de CERTIFICADO_STOCK → POR_ARRIBAR por seed',
+            });
+
+            details.push({
+              vehicleId,
+              chassis,
+              sede: vehicle['sede'],
+              status: 'reset',
+            });
+            this.logger.log(`  ✅ ${chassis} → POR_ARRIBAR`);
+            reset++;
+          } catch (err: any) {
+            this.logger.error(
+              `  ❌ Error reseteando ${chassis}: ${err.message}`,
+            );
+            details.push({
+              vehicleId,
+              chassis,
+              status: 'error',
+              error: err.message,
+            });
+          }
         }
 
-        // 3. Resetear campos del vehículo a estado POR_ARRIBAR
-        const ts = this.firebase.serverTimestamp();
-        await this.db.collection('vehicles').doc(vehicleId).update({
-          status: VehicleStatus.POR_ARRIBAR,
-          registrationSentDate: null,
-          registrationReceivedDate: null,
-          receptionDate: null,
-          certificationDate: null,
-          certifiedBy: null,
-          documentationDate: null,
-          documentedBy: null,
-          installationCompleteDate: null,
-          installedBy: null,
-          deliveryDate: null,
-          deliveredBy: null,
-          originConcessionaire: null,
-          photoUrl: null,
-          updatedAt: ts,
-        });
-
-        // 4. Registrar en historial
-        const historyId = uuidv4();
-        await this.db
-          .collection('vehicles')
-          .doc(vehicleId)
-          .collection('statusHistory')
-          .doc(historyId)
-          .set({
-            id: historyId,
-            previousStatus: VehicleStatus.CERTIFICADO_STOCK,
-            newStatus: VehicleStatus.POR_ARRIBAR,
-            changedBy: 'seed-system',
-            changedByName: 'Seed Reset',
-            changedAt: ts,
-            sede: vehicle['sede'],
-            notes: 'Reset masivo de CERTIFICADO_STOCK → POR_ARRIBAR por seed',
-          });
-
-        details.push({
-          vehicleId,
-          chassis,
-          sede: vehicle['sede'],
-          status: 'reset',
-        });
-        this.logger.log(`  ✅ ${chassis} → POR_ARRIBAR`);
-        reset++;
-      } catch (err: any) {
-        this.logger.error(`  ❌ Error reseteando ${chassis}: ${err.message}`);
-        details.push({
-          vehicleId,
-          chassis,
-          status: 'error',
-          error: err.message,
-        });
-      }
-    }
-
-    this.logger.log(`🔄 Reset completado: ${reset}/${snap.size} vehículos`);
-    return { total: snap.size, reset, details };
+        this.logger.log(`🔄 Reset completado: ${reset}/${snap.size} vehículos`);
+        return { total: snap.size, reset, details };
+      },
+    );
   }
 }

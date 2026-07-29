@@ -1,4 +1,12 @@
-import { IsString, IsNotEmpty, IsArray, IsOptional, IsBoolean, IsEnum, ArrayMinSize } from 'class-validator';
+import {
+  IsString,
+  IsNotEmpty,
+  IsArray,
+  IsOptional,
+  IsBoolean,
+  IsEnum,
+  ArrayMinSize,
+} from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { AccessoryKey } from '../../../common/enums/accessory-key.enum';
 
@@ -20,12 +28,19 @@ export class CreateServiceOrderDto {
 }
 
 export class AssignTechnicianDto {
-  @ApiProperty({ description: 'UID del técnico asignado (obtenido de GET /users?role=PERSONAL_TALLER)', example: 'uid-tecnico-xyz' })
+  @ApiProperty({
+    description:
+      'UID del técnico asignado (obtenido de GET /users?role=PERSONAL_TALLER)',
+    example: 'uid-tecnico-xyz',
+  })
   @IsString()
   @IsNotEmpty()
   technicianUid: string;
 
-  @ApiProperty({ description: 'Nombre del técnico para visualización', example: 'Carlos Ramírez' })
+  @ApiProperty({
+    description: 'Nombre del técnico para visualización',
+    example: 'Carlos Ramírez',
+  })
   @IsString()
   @IsNotEmpty()
   technicianName: string;
@@ -53,7 +68,8 @@ export class ReopenOrderDto {
   vehicleId: string;
 
   @ApiProperty({
-    description: 'Uno o más accesorios a agregar (valores del enum AccessoryKey, mismo listado de documentación)',
+    description:
+      'Uno o más accesorios a agregar (valores del enum AccessoryKey, mismo listado de documentación)',
     type: [String],
     enum: AccessoryKey,
     isArray: true,
@@ -64,7 +80,11 @@ export class ReopenOrderDto {
   @IsEnum(AccessoryKey, { each: true })
   newAccessories: string[];
 
-  @ApiProperty({ description: 'Motivo de la reapertura (obligatorio, queda en statusHistory)', example: 'Cliente solicitó agregar neblineros' })
+  @ApiProperty({
+    description:
+      'Motivo de la reapertura (obligatorio, queda en statusHistory)',
+    example: 'Cliente solicitó agregar neblineros',
+  })
   @IsString()
   @IsNotEmpty()
   reason: string;

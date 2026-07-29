@@ -8,11 +8,12 @@ import {
 import { FirebaseService } from '../../firebase/firebase.service';
 import { VehiclesService } from '../vehicles/vehicles.service';
 import { NotificationsService } from '../notifications/notifications.service';
+import { DeliveryRepository } from './delivery.repository';
+import { AppointmentLookupRepository } from './appointment-lookup.repository';
 import { CreateCeremonyDto } from './dto/delivery.dto';
 import { VehicleStatus } from '../../common/enums/vehicle-status.enum';
 import { RoleEnum } from '../../common/enums/role.enum';
 import { AuthenticatedUser } from '../../common/interfaces/authenticated-user.interface';
-import { v4 as uuidv4 } from 'uuid';
 
 @Injectable()
 export class DeliveryService {
@@ -22,11 +23,9 @@ export class DeliveryService {
     private readonly firebase: FirebaseService,
     private readonly vehiclesService: VehiclesService,
     private readonly notificationsService: NotificationsService,
+    private readonly deliveryRepository: DeliveryRepository,
+    private readonly appointmentLookup: AppointmentLookupRepository,
   ) {}
-
-  private get db() {
-    return this.firebase.firestore();
-  }
 
   async createCeremony(
     vehicleId: string,
@@ -46,14 +45,9 @@ export class DeliveryService {
     }
 
     // Verificar que el asesor es el asignado al agendamiento
-    const aptSnap = await this.db
-      .collection('appointments')
-      .doc(dto.appointmentId)
-      .get();
-    if (!aptSnap.exists)
-      throw new NotFoundException('Agendamiento no encontrado');
+    const apt = await this.appointmentLookup.findById(dto.appointmentId);
+    if (!apt) throw new NotFoundException('Agendamiento no encontrado');
 
-    const apt = aptSnap.data()!;
     if (
       apt['assignedAdvisorId'] !== user.uid &&
       user.role !== RoleEnum.JEFE_TALLER &&
@@ -125,10 +119,10 @@ export class DeliveryService {
       createdAt: now,
     };
 
-    await this.db
-      .collection('deliveryCeremonies')
-      .doc(vehicleId)
-      .set(ceremonyData);
+    // El id del documento es el vehicleId: un vehículo tiene a lo sumo una
+    // ceremonia. El repositorio pisa cualquier tenantId del payload con el
+    // del contexto — acá no viaja ninguno porque el tipo lo excluye.
+    await this.deliveryRepository.create(ceremonyData, vehicleId);
 
     await this.vehiclesService.changeStatus(
       vehicleId,
@@ -145,10 +139,11 @@ export class DeliveryService {
     );
 
     // Marcar el agendamiento como completado
-    await this.db.collection('appointments').doc(dto.appointmentId).update({
-      status: 'ENTREGADO',
-      updatedAt: now,
-    });
+    await this.appointmentLookup.markStatus(
+      dto.appointmentId,
+      'ENTREGADO',
+      now,
+    );
 
     await this.notificationsService.notify({
       type: 'ESTADO_CAMBIADO',
@@ -172,21 +167,16 @@ export class DeliveryService {
   }
 
   async getCeremony(vehicleId: string) {
-    const doc = await this.db
-      .collection('deliveryCeremonies')
-      .doc(vehicleId)
-      .get();
-    if (!doc.exists) return null;
-
-    const data = doc.data() as Record<string, any>;
+    const data = await this.deliveryRepository.findById(vehicleId);
+    if (!data) return null;
 
     // Regenerar signed URLs para que nunca expiren en el GET
-    if (data?.deliveryPhotoUrl) {
+    if (data.deliveryPhotoUrl) {
       data.deliveryPhotoUrl = await this.firebase
         .getSignedUrl(`vehicles/${vehicleId}/delivery/ceremony-photo.jpg`)
         .catch(() => data.deliveryPhotoUrl);
     }
-    if (data?.signedActaUrl) {
+    if (data.signedActaUrl) {
       data.signedActaUrl = await this.firebase
         .getSignedUrl(`vehicles/${vehicleId}/delivery/signed-acta.jpg`)
         .catch(() => data.signedActaUrl);

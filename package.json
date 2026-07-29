@@ -12,12 +12,17 @@
     "start:dev": "nest start --watch",
     "start:debug": "nest start --debug --watch",
     "start:prod": "node dist/main",
-    "lint": "eslint \"{src,apps,libs,test}/**/*.ts\" --fix",
+    "lint": "eslint \"{src,apps,libs,test,features,scripts}/**/*.{ts,js}\" --fix",
     "test": "jest",
     "test:watch": "jest --watch",
     "test:cov": "jest --coverage",
     "test:debug": "node --inspect-brk -r tsconfig-paths/register -r ts-node/register node_modules/.bin/jest --runInBand",
-    "test:e2e": "jest --config ./test/jest-e2e.json"
+    "test:e2e": "jest --config ./test/jest-e2e.json",
+    "test:integration": "firebase emulators:exec --project demo-kia-dealer-test --only firestore,auth,storage \"jest --config test/jest-integration.json\"",
+    "test:bdd": "firebase emulators:exec --project demo-kia-dealer-test --only firestore,auth,storage \"cucumber-js\"",
+    "test:bdd:critico": "firebase emulators:exec --project demo-kia-dealer-test --only firestore,auth,storage \"cucumber-js --profile critico\"",
+    "test:shape": "node scripts/test-shape-report.js",
+    "test:ci": "npm run test -- --coverage && npm run test:integration && npm run test:bdd:critico && npm run test:shape"
   },
   "dependencies": {
     "@nestjs/common": "^11.0.1",
@@ -40,8 +45,10 @@
     "xlsx": "^0.18.5"
   },
   "devDependencies": {
+    "@cucumber/cucumber": "^13.2.0",
     "@eslint/eslintrc": "^3.2.0",
     "@eslint/js": "^9.18.0",
+    "@firebase/rules-unit-testing": "^5.0.1",
     "@nestjs/cli": "^11.0.0",
     "@nestjs/schematics": "^11.0.0",
     "@nestjs/testing": "^11.0.1",
@@ -52,6 +59,8 @@
     "eslint": "^9.18.0",
     "eslint-config-prettier": "^10.0.1",
     "eslint-plugin-prettier": "^5.2.2",
+    "firebase": "^12.16.0",
+    "firebase-tools": "^15.24.0",
     "globals": "^16.0.0",
     "jest": "^30.0.0",
     "prettier": "^3.4.2",
@@ -79,9 +88,19 @@
       "node_modules/(?!(uuid)/)"
     ],
     "collectCoverageFrom": [
-      "**/*.(t|j)s"
+      "**/*.(t|j)s",
+      "!**/*.module.ts",
+      "!**/main.ts"
     ],
     "coverageDirectory": "../coverage",
-    "testEnvironment": "node"
+    "testEnvironment": "node",
+    "coverageThreshold": {
+      "global": {
+        "statements": 26,
+        "branches": 22,
+        "functions": 20,
+        "lines": 26
+      }
+    }
   }
 }

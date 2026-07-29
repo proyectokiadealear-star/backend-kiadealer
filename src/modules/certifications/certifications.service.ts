@@ -8,6 +8,11 @@ import { FirebaseService } from '../../firebase/firebase.service';
 import { VehiclesService } from '../vehicles/vehicles.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import {
+  CertificationDocument,
+  CertificationsRepository,
+} from './certifications.repository';
+import { VehicleFieldsRepository } from './vehicle-fields.repository';
+import {
   CreateCertificationDto,
   ImprintsStatus,
 } from './dto/create-certification.dto';
@@ -23,11 +28,9 @@ export class CertificationsService {
     private readonly firebase: FirebaseService,
     private readonly vehiclesService: VehiclesService,
     private readonly notificationsService: NotificationsService,
+    private readonly certifications: CertificationsRepository,
+    private readonly vehicleFields: VehicleFieldsRepository,
   ) {}
-
-  private get db() {
-    return this.firebase.firestore();
-  }
 
   async create(
     vehicleId: string,
@@ -42,11 +45,11 @@ export class CertificationsService {
 
     const currentStatus = vehicle['status'] as VehicleStatus;
 
-    // Determinar si es un upsert (vehículo ya certificado — ej: proviene del seed)
-    const existing = await this.db
-      .collection('certifications')
-      .doc(vehicleId)
-      .get();
+    // Determinar si es un upsert (vehículo ya certificado — ej: proviene del seed).
+    // El repositorio acota la búsqueda al tenant activo: una certificación de otro
+    // concesionario con este mismo vehicleId (en la práctica, imposible — los ids
+    // son UUID por vehículo) se ve como inexistente, nunca como ajena.
+    const existing = await this.certifications.findById(vehicleId);
 
     // Estados que indican que el vehículo ya pasó la fase de certificación
     const postCertificationStatuses: VehicleStatus[] = [
@@ -62,8 +65,8 @@ export class CertificationsService {
       VehicleStatus.CEDIDO,
     ];
 
-    // Ya tiene doc de certificación en Firestore
-    const certDocExists = existing.exists;
+    // Ya tiene doc de certificación
+    const certDocExists = existing !== null;
     // El estado ya está en una fase post-certificación
     const alreadyInPostCertStatus =
       postCertificationStatuses.includes(currentStatus);
@@ -129,11 +132,9 @@ export class CertificationsService {
 
     if (isUpsert) {
       // ── UPSERT: actualizar certificación existente (seed o re-certificación) ──
-      const prevRimsPhotoUrl = existing.exists
-        ? (existing.data()?.['rims']?.photoUrl ?? null)
-        : null;
+      const prevRimsPhotoUrl = existing?.rims?.photoUrl ?? null;
 
-      const certData: Record<string, unknown> = {
+      const certFields = {
         vehicleId,
         radio: dto.radio,
         rims: {
@@ -146,20 +147,19 @@ export class CertificationsService {
         mileage: dto.mileage,
         imprints: dto.imprints,
         notes: dto.notes ?? null,
-        certifiedAt: existing.exists
-          ? (existing.data()?.['certifiedAt'] ?? now)
-          : now,
-        certifiedBy: existing.exists
-          ? (existing.data()?.['certifiedBy'] ?? user.uid)
-          : user.uid,
+        certifiedAt: existing?.certifiedAt ?? now,
+        certifiedBy: existing?.certifiedBy ?? user.uid,
         updatedAt: now,
         updatedBy: user.uid,
       };
 
-      await this.db
-        .collection('certifications')
-        .doc(vehicleId)
-        .set(certData, { merge: true });
+      if (certDocExists) {
+        await this.certifications.update(vehicleId, certFields);
+      } else {
+        // isUpsert por estado post-certificación sin doc previo (ej: seed
+        // que solo tocó el vehículo, no la certificación).
+        await this.certifications.create(certFields, vehicleId);
+      }
 
       if (needsStatusAdvance) {
         // El vehículo aún está en DOCUMENTADO (o similar) con doc del seed —
@@ -185,10 +185,7 @@ export class CertificationsService {
           originConcessionaire: dto.originConcessionaire,
           ...(vehiclePhotoUrl && { photoUrl: vehiclePhotoUrl }),
         };
-        await this.db
-          .collection('vehicles')
-          .doc(vehicleId)
-          .update(vehicleUpdates);
+        await this.vehicleFields.updateFields(vehicleId, vehicleUpdates);
 
         // Registrar en historial como corrección
         await this.vehiclesService.addStatusHistory(
@@ -218,7 +215,7 @@ export class CertificationsService {
     }
 
     // ── CREATE: flujo normal (vehículo en DOCUMENTADO o NO_FACTURADO sin certificación previa) ──
-    const certData = {
+    const certFields = {
       vehicleId,
       radio: dto.radio,
       rims: {
@@ -235,20 +232,17 @@ export class CertificationsService {
       certifiedBy: user.uid,
     };
 
-    await this.db.collection('certifications').doc(vehicleId).set(certData);
+    await this.certifications.create(certFields, vehicleId);
 
     if (isNoFacturado) {
       // ── Branch B: vehículo en NO_FACTURADO — NO cambiar status ──
-      await this.db
-        .collection('vehicles')
-        .doc(vehicleId)
-        .update({
-          certifiedWhileNoFacturado: true,
-          certificationDate: now,
-          certifiedBy: user.uid,
-          originConcessionaire: dto.originConcessionaire ?? null,
-          ...(vehiclePhotoUrl && { photoUrl: vehiclePhotoUrl }),
-        });
+      await this.vehicleFields.updateFields(vehicleId, {
+        certifiedWhileNoFacturado: true,
+        certificationDate: now,
+        certifiedBy: user.uid,
+        originConcessionaire: dto.originConcessionaire ?? null,
+        ...(vehiclePhotoUrl && { photoUrl: vehiclePhotoUrl }),
+      });
 
       await this.vehiclesService.addStatusHistory(
         vehicleId,
@@ -284,18 +278,14 @@ export class CertificationsService {
 
     // ── Branch C: vehículo en estado temprano (POR_ARRIBAR/ENVIADO_A_MATRICULAR/DOCUMENTACION_PENDIENTE) — NO cambiar status ──
     if (isEarlyState) {
-      await this.db.collection('certifications').doc(vehicleId).set(certData);
-
-      await this.db
-        .collection('vehicles')
-        .doc(vehicleId)
-        .update({
-          certifiedWhileEarlyState: true,
-          certificationDate: now,
-          certifiedBy: user.uid,
-          originConcessionaire: dto.originConcessionaire ?? null,
-          ...(vehiclePhotoUrl && { photoUrl: vehiclePhotoUrl }),
-        });
+      // La certificación ya se persistió arriba (certFields) — no hace falta repetirlo.
+      await this.vehicleFields.updateFields(vehicleId, {
+        certifiedWhileEarlyState: true,
+        certificationDate: now,
+        certifiedBy: user.uid,
+        originConcessionaire: dto.originConcessionaire ?? null,
+        ...(vehiclePhotoUrl && { photoUrl: vehiclePhotoUrl }),
+      });
 
       await this.vehiclesService.addStatusHistory(
         vehicleId,
@@ -425,23 +415,23 @@ export class CertificationsService {
   }
 
   async findOne(vehicleId: string) {
-    const doc = await this.db.collection('certifications').doc(vehicleId).get();
-    if (!doc.exists) throw new NotFoundException('Certificación no encontrada');
-
-    const data = doc.data() as Record<string, any>;
+    const cert = await this.certifications.findByIdOrThrow(
+      vehicleId,
+      () => new NotFoundException('Certificación no encontrada'),
+    );
 
     // Regenerar signed URL para que nunca expire en el GET
-    if (data?.rims?.photoUrl) {
+    if (cert.rims?.photoUrl) {
       const storagePath = `vehicles/${vehicleId}/rims-photo.jpg`;
-      data.rims = {
-        ...data.rims,
+      cert.rims = {
+        ...cert.rims,
         photoUrl: await this.firebase
           .getSignedUrl(storagePath)
-          .catch(() => data.rims.photoUrl),
+          .catch(() => cert.rims.photoUrl),
       };
     }
 
-    return data;
+    return cert;
   }
 
   async update(
@@ -453,8 +443,10 @@ export class CertificationsService {
       rimsPhoto?: Express.Multer.File;
     },
   ) {
-    const doc = await this.db.collection('certifications').doc(vehicleId).get();
-    if (!doc.exists) throw new NotFoundException('Certificación no encontrada');
+    const existing = await this.certifications.findByIdOrThrow(
+      vehicleId,
+      () => new NotFoundException('Certificación no encontrada'),
+    );
 
     const vehicle = await this.vehiclesService.assertExists(vehicleId);
 
@@ -476,30 +468,23 @@ export class CertificationsService {
       );
       const newVUrl = await this.firebase.getSignedUrl(vPhotoPath);
       // Actualizar photoUrl en el vehículo
-      await this.db
-        .collection('vehicles')
-        .doc(vehicleId)
-        .update({ photoUrl: newVUrl });
+      await this.vehicleFields.updateFields(vehicleId, { photoUrl: newVUrl });
     } else if (dto.vehiclePhotoBase64) {
       const vPhotoPath = `vehicles/${vehicleId}/photo.jpg`;
       await this.firebase.deleteFile(vPhotoPath).catch(() => {});
       const buffer = Buffer.from(dto.vehiclePhotoBase64, 'base64');
       await this.firebase.uploadBuffer(buffer, vPhotoPath, 'image/jpeg');
       const newVUrl = await this.firebase.getSignedUrl(vPhotoPath);
-      await this.db
-        .collection('vehicles')
-        .doc(vehicleId)
-        .update({ photoUrl: newVUrl });
+      await this.vehicleFields.updateFields(vehicleId, { photoUrl: newVUrl });
     }
     // Limpiar vehiclePhotoBase64 del update de certificación (no se guarda en cert doc)
     delete updates['vehiclePhotoBase64'];
 
     // Actualizar originConcessionaire en el vehículo si viene
     if (dto.originConcessionaire) {
-      await this.db
-        .collection('vehicles')
-        .doc(vehicleId)
-        .update({ originConcessionaire: dto.originConcessionaire });
+      await this.vehicleFields.updateFields(vehicleId, {
+        originConcessionaire: dto.originConcessionaire,
+      });
     }
 
     // Reemplazar foto de aros si se recibe nueva
@@ -512,10 +497,16 @@ export class CertificationsService {
         files.rimsPhoto.mimetype,
       );
       const newUrl = await this.firebase.getSignedUrl(storagePath);
-      updates['rims'] = { ...(doc.data()?.['rims'] ?? {}), photoUrl: newUrl };
+      updates['rims'] = { ...(existing.rims ?? {}), photoUrl: newUrl };
     }
 
-    await this.db.collection('certifications').doc(vehicleId).update(updates);
+    // `updates` mezcla campos del dto (parcial, tipado en el controlador) con
+    // `updatedAt` y opcionalmente `rims` reconstruido — se castea porque ya
+    // pasó por Object.fromEntries y perdió el tipado estricto del dto.
+    await this.certifications.update(
+      vehicleId,
+      updates as Partial<Omit<CertificationDocument, 'tenantId' | 'id'>>,
+    );
 
     // Registrar en historial los campos modificados
     const changedFields: string[] = [];
@@ -546,8 +537,10 @@ export class CertificationsService {
   }
 
   async remove(vehicleId: string, user: AuthenticatedUser) {
-    const doc = await this.db.collection('certifications').doc(vehicleId).get();
-    if (!doc.exists) throw new NotFoundException('Certificación no encontrada');
+    await this.certifications.findByIdOrThrow(
+      vehicleId,
+      () => new NotFoundException('Certificación no encontrada'),
+    );
 
     // Leer el vehículo ANTES de eliminar el cert doc (necesario para el branch)
     const vehicle = await this.vehiclesService.assertExists(vehicleId);
@@ -575,11 +568,11 @@ export class CertificationsService {
       .catch(() => {});
 
     // Eliminar el documento de certificación
-    await this.db.collection('certifications').doc(vehicleId).delete();
+    await this.certifications.delete(vehicleId);
 
     if (isNoFacturadoBranch) {
       // Branch B: limpiar flag, el vehículo SE QUEDA en NO_FACTURADO
-      await this.db.collection('vehicles').doc(vehicleId).update({
+      await this.vehicleFields.updateFields(vehicleId, {
         certifiedWhileNoFacturado: false,
         certificationDate: null,
         certifiedBy: null,
@@ -596,7 +589,7 @@ export class CertificationsService {
     } else if (isEarlyStateBranch) {
       // Branch C: limpiar flag, el vehículo SE QUEDA en POR_ARRIBAR / ENVIADO_A_MATRICULAR
       const currentStatus = vehicle['status'] as VehicleStatus;
-      await this.db.collection('vehicles').doc(vehicleId).update({
+      await this.vehicleFields.updateFields(vehicleId, {
         certifiedWhileEarlyState: false,
         certificationDate: null,
         certifiedBy: null,
@@ -613,7 +606,7 @@ export class CertificationsService {
     } else if (isDocumentadoWithEarlyFlag) {
       // Branch D: vehículo ya en DOCUMENTADO con flag early activo —
       // solo limpiar flag, NO revertir status (ya está en DOCUMENTADO)
-      await this.db.collection('vehicles').doc(vehicleId).update({
+      await this.vehicleFields.updateFields(vehicleId, {
         certifiedWhileEarlyState: false,
         certificationDate: null,
         certifiedBy: null,

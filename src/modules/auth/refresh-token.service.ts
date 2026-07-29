@@ -10,17 +10,12 @@ import { ConfigService } from '@nestjs/config';
 import { FirebaseService } from '../../firebase/firebase.service';
 import * as admin from 'firebase-admin';
 import { v4 as uuidv4 } from 'uuid';
+import {
+  RefreshTokenDocument,
+  RefreshTokenRepository,
+} from './refresh-token.repository';
 
-export interface RefreshTokenDocument {
-  tokenId: string;
-  uid: string;
-  firebaseRefreshToken: string; // NEVER returned to client
-  active: boolean;
-  createdAt: FirebaseFirestore.Timestamp;
-  expiresAt: FirebaseFirestore.Timestamp;
-  lastUsedAt: FirebaseFirestore.Timestamp | null;
-  userAgent?: string;
-}
+export type { RefreshTokenDocument } from './refresh-token.repository';
 
 interface FirebaseTokenResponse {
   id_token: string;
@@ -31,13 +26,42 @@ interface FirebaseTokenError {
   error: { message: string };
 }
 
+/**
+ * ── Decisión de arquitectura: por qué este módulo NO usa TenantScopedRepository ──
+ *
+ * Este servicio es el caso aislado del resto de la migración a multi-tenant
+ * (ver docs/design/01-multi-tenancy.md y docs/design/06-runbook-migracion.md).
+ * `/auth/refresh` es, por definición, el endpoint que se llama cuando el
+ * idToken ya venció: en esa request no hay `req.user`, no corrió
+ * `FirebaseAuthGuard`, no corrió `TenantGuard` y no hay `TenantContext`
+ * abierto (`TenantContext.getOrThrow()` reventaría siempre). Forzar el uso
+ * de TenantScopedRepository acá no sería "más seguro": rompería el refresh
+ * para el 100% de los usuarios, todo el tiempo, porque el fallo cerrado que
+ * protege al resto de la app no tiene ningún contexto del cual leer.
+ *
+ * El acceso a Firestore vive en RefreshTokenRepository (acceso crudo vía
+ * `rawFirestore()`, documentado ahí). El aislamiento entre concesionarios en
+ * este flujo no se logra con `where('tenantId', ...)` — se logra así:
+ *
+ *  1. El tokenId es un secreto opaco (UUID v4) ligado 1:1 a un `uid` en el
+ *     momento de creación. No hay operación de listado: todo lookup es por
+ *     ese secreto o por el `uid` ya resuelto del documento encontrado, nunca
+ *     por un valor que el cliente pueda inventar para "cruzar" de usuario.
+ *  2. `RefreshTokenDocument.tenantId` guarda el tenantId del usuario al
+ *     emitir el token (custom claim verificada, ver AuthService.login()).
+ *     `exchangeToken()` lo compara contra la custom claim vigente al
+ *     refrescar: si un usuario cambió de concesionario (o sus claims fueron
+ *     alteradas) entre la emisión del token y su uso, la sesión vieja se
+ *     revoca en vez de devolver un idToken para el tenant nuevo con un
+ *     documento de sesión que quedó asociado al viejo.
+ */
 @Injectable()
 export class RefreshTokenService {
   private readonly logger = new Logger(RefreshTokenService.name);
-  private readonly COLLECTION = 'refresh_tokens';
   private readonly TTL_SECONDS = 43200; // 12h
 
   constructor(
+    private readonly repository: RefreshTokenRepository,
     private readonly firebase: FirebaseService,
     private readonly config: ConfigService,
   ) {}
@@ -45,10 +69,17 @@ export class RefreshTokenService {
   /**
    * Creates a new refresh token document in Firestore.
    * Returns the opaque tokenId (UUID v4) to be sent to the client.
+   *
+   * `tenantId` es opcional porque durante la transición de la migración
+   * (antes de re-emitir custom claims, ver runbook paso 4) un usuario puede
+   * autenticarse sin ese claim todavía. El documento queda sin `tenantId` y
+   * la validación de coherencia en `exchangeToken()` simplemente no aplica
+   * para ese token — es aditivo, no bloqueante.
    */
   async createToken(
     uid: string,
     firebaseRefreshToken: string,
+    tenantId?: string,
   ): Promise<string> {
     const tokenId = uuidv4();
     const now = admin.firestore.Timestamp.now();
@@ -64,13 +95,10 @@ export class RefreshTokenService {
       createdAt: now,
       expiresAt,
       lastUsedAt: null,
+      ...(tenantId ? { tenantId } : {}),
     };
 
-    await this.firebase
-      .firestore()
-      .collection(this.COLLECTION)
-      .doc(tokenId)
-      .set(doc);
+    await this.repository.save(doc);
 
     this.logger.log(`Refresh token creado para uid=${uid}`);
     return tokenId;
@@ -82,17 +110,11 @@ export class RefreshTokenService {
    * Returns the full RefreshTokenDocument on success.
    */
   async validateToken(tokenId: string): Promise<RefreshTokenDocument> {
-    const snap = await this.firebase
-      .firestore()
-      .collection(this.COLLECTION)
-      .doc(tokenId)
-      .get();
+    const doc = await this.repository.findById(tokenId);
 
-    if (!snap.exists) {
+    if (!doc) {
       throw new UnauthorizedException('Refresh token inválido');
     }
-
-    const doc = snap.data() as RefreshTokenDocument;
 
     if (!doc.active) {
       throw new UnauthorizedException('Sesión revocada');
@@ -153,12 +175,31 @@ export class RefreshTokenService {
       );
     }
 
+    // Coherencia de tenant — ver docblock de la clase. Solo aplica cuando
+    // AMBOS lados tienen el dato: un token viejo sin `tenantId` (pre-remint
+    // de claims) no se bloquea por esto, y una claim todavía sin tenantId
+    // tampoco — esos casos ya los rechaza TenantGuard más adelante en la
+    // cadena, con el código correcto (401, no acá).
+    const claimTenantId = decoded.tenantId as string | undefined;
+    if (doc.tenantId && claimTenantId && doc.tenantId !== claimTenantId) {
+      await this.repository.revoke(
+        doc.tokenId,
+        admin.firestore.Timestamp.now(),
+      );
+      this.logger.warn(
+        `Incoherencia de tenant al refrescar uid=${doc.uid}: token emitido para ` +
+          `tenantId=${doc.tenantId}, claim actual tenantId=${claimTenantId}. Sesión revocada.`,
+      );
+      throw new ForbiddenException(
+        'La sesión ya no es válida. Volvé a iniciar sesión.',
+      );
+    }
+
     // Update lastUsedAt
-    await this.firebase
-      .firestore()
-      .collection(this.COLLECTION)
-      .doc(doc.tokenId)
-      .update({ lastUsedAt: admin.firestore.Timestamp.now() });
+    await this.repository.updateLastUsed(
+      doc.tokenId,
+      admin.firestore.Timestamp.now(),
+    );
 
     this.logger.log(`Token renovado para uid=${doc.uid}`);
     return {
@@ -172,23 +213,15 @@ export class RefreshTokenService {
    * Throws NotFoundException if the document does not exist.
    */
   async revokeToken(tokenId: string): Promise<void> {
-    const ref = this.firebase
-      .firestore()
-      .collection(this.COLLECTION)
-      .doc(tokenId);
-    const snap = await ref.get();
+    const doc = await this.repository.findById(tokenId);
 
-    if (!snap.exists) {
+    if (!doc) {
       throw new NotFoundException('Sesión no encontrada');
     }
 
-    const data = snap.data() as RefreshTokenDocument;
-    if (!data.active) return; // already revoked — idempotent no-op
+    if (!doc.active) return; // already revoked — idempotent no-op
 
-    await ref.update({
-      active: false,
-      revokedAt: admin.firestore.Timestamp.now(),
-    });
+    await this.repository.revoke(tokenId, admin.firestore.Timestamp.now());
     this.logger.log(`Token revocado: ${tokenId}`);
   }
 
@@ -198,25 +231,19 @@ export class RefreshTokenService {
    * Returns the number of sessions revoked.
    */
   async revokeAllForUser(uid: string): Promise<number> {
-    const snap = await this.firebase
-      .firestore()
-      .collection(this.COLLECTION)
-      .where('uid', '==', uid)
-      .where('active', '==', true)
-      .get();
+    const activeDocs = await this.repository.findActiveByUid(uid);
 
-    if (!snap.empty) {
-      const batch = this.firebase.firestore().batch();
+    if (activeDocs.length > 0) {
       const revokedAt = admin.firestore.Timestamp.now();
-      snap.docs.forEach((docSnap) => {
-        batch.update(docSnap.ref, { active: false, revokedAt });
-      });
-      await batch.commit();
+      await this.repository.revokeMany(
+        activeDocs.map((d) => d.tokenId),
+        revokedAt,
+      );
     }
 
     await this.firebase.auth().revokeRefreshTokens(uid);
 
-    const count = snap.size;
+    const count = activeDocs.length;
     this.logger.log(`${count} sesión(es) revocadas para uid=${uid}`);
     return count;
   }

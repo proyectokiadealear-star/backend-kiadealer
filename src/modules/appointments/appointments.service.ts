@@ -1,4 +1,11 @@
-import { Injectable, BadRequestException, ConflictException, NotFoundException, Logger } from '@nestjs/common';
+import {
+  Injectable,
+  BadRequestException,
+  ConflictException,
+  NotFoundException,
+  Logger,
+} from '@nestjs/common';
+import { v4 as uuidv4 } from 'uuid';
 import { FirebaseService } from '../../firebase/firebase.service';
 import { VehiclesService } from '../vehicles/vehicles.service';
 import { NotificationsService } from '../notifications/notifications.service';
@@ -7,11 +14,23 @@ import {
   QueryAppointmentsDto,
   UpdateAppointmentDto,
 } from './dto/appointment.dto';
+import {
+  Appointment,
+  AppointmentQueryFilters,
+  AppointmentsRepository,
+} from './appointments.repository';
+import { AppointmentVehicleBridgeRepository } from './appointment-vehicle-bridge.repository';
 import { VehicleStatus } from '../../common/enums/vehicle-status.enum';
 import { RoleEnum } from '../../common/enums/role.enum';
 import { AuthenticatedUser } from '../../common/interfaces/authenticated-user.interface';
-import { v4 as uuidv4 } from 'uuid';
 
+/**
+ * El servicio no conoce `tenantId` ni `TenantContext` — toda lectura y
+ * escritura de Firestore pasa por `AppointmentsRepository` (agendamientos,
+ * con scope de tenant) o `AppointmentVehicleBridgeRepository` (el único
+ * punto donde se toca `vehicles` directamente, todavía sin migrar). Ver
+ * docs/design/01-multi-tenancy.md, diagrama C4.
+ */
 @Injectable()
 export class AppointmentsService {
   private readonly logger = new Logger(AppointmentsService.name);
@@ -20,13 +39,13 @@ export class AppointmentsService {
     private readonly firebase: FirebaseService,
     private readonly vehiclesService: VehiclesService,
     private readonly notificationsService: NotificationsService,
+    private readonly appointmentsRepository: AppointmentsRepository,
+    private readonly vehicleBridge: AppointmentVehicleBridgeRepository,
   ) {}
 
-  private get db() { return this.firebase.firestore(); }
-
   /**
-   * Shared helper: throws ConflictException if the advisor already has a
-   * non-CANCELADO appointment at the given date+time, excluding `excludeAptId`.
+   * Lanza ConflictException si el asesor ya tiene un agendamiento no
+   * CANCELADO en esa fecha+hora, excluyendo `excludeAptId` (reagendamiento).
    */
   private async assertNoSlotConflict(
     advisorId: string,
@@ -34,20 +53,17 @@ export class AppointmentsService {
     time: string,
     excludeAptId?: string,
   ): Promise<void> {
-    const snap = await this.db
-      .collection('appointments')
-      .where('assignedAdvisorId', '==', advisorId)
-      .where('scheduledDate', '==', date)
-      .get();
+    const appointments = await this.appointmentsRepository.findByAdvisorAndDate(
+      advisorId,
+      date,
+    );
 
-    const slotTaken = snap.docs.some((d) => {
-      const data = d.data();
-      return (
-        data['scheduledTime'] === time &&
-        data['status'] !== 'CANCELADO' &&
-        d.id !== excludeAptId
-      );
-    });
+    const slotTaken = appointments.some(
+      (apt) =>
+        apt.scheduledTime === time &&
+        apt.status !== 'CANCELADO' &&
+        apt.id !== excludeAptId,
+    );
 
     if (slotTaken) {
       throw new ConflictException(
@@ -60,52 +76,71 @@ export class AppointmentsService {
     const vehicle = await this.vehiclesService.assertExists(dto.vehicleId);
 
     if (vehicle['status'] !== VehicleStatus.LISTO_PARA_ENTREGA) {
-      throw new BadRequestException(`El vehículo debe estar LISTO_PARA_ENTREGA. Estado: ${vehicle['status']}`);
+      throw new BadRequestException(
+        `El vehículo debe estar LISTO_PARA_ENTREGA. Estado: ${vehicle['status']}`,
+      );
     }
 
     if (!vehicle['registrationReceivedDate']) {
-      throw new BadRequestException('No se puede agendar sin haber recibido la matrícula del vehículo.');
+      throw new BadRequestException(
+        'No se puede agendar sin haber recibido la matrícula del vehículo.',
+      );
     }
 
     // ── Verificar conflicto de horario para el asesor ──────────────────────
-    await this.assertNoSlotConflict(dto.assignedAdvisorId, dto.scheduledDate, dto.scheduledTime);
+    await this.assertNoSlotConflict(
+      dto.assignedAdvisorId,
+      dto.scheduledDate,
+      dto.scheduledTime,
+    );
     // ──────────────────────────────────────────────────────────────────────
 
-    const aptId = uuidv4();
     const now = this.firebase.serverTimestamp();
 
-    const aptData = {
-      id: aptId,
-      vehicleId: dto.vehicleId,
-      chassis: vehicle['chassis'],
-      model: vehicle['model'],
-      color: vehicle['color'] ?? null,
-      sede: vehicle['sede'],
-      clientName: vehicle['clientName'] ?? null,
-      clientId: vehicle['clientId'] ?? null,
-      scheduledDate: dto.scheduledDate,
-      scheduledTime: dto.scheduledTime,
-      assignedAdvisorId: dto.assignedAdvisorId,
-      assignedAdvisorName: dto.assignedAdvisorName,
-      status: 'AGENDADO',
-      createdBy: user.uid,
-      createdByName: user.displayName ?? user.email,
-      createdAt: now,
-      updatedAt: now,
-    };
+    // El id se genera acá (no se deja autogenerado) para preservarlo como id
+    // determinístico del documento, igual que antes de la migración. El
+    // campo `id` ya no se guarda DENTRO del documento: el repositorio base
+    // siempre lo inyecta en la respuesta desde el id del doc — mismo criterio
+    // documentado para `certifications` en docs/design/06-runbook-migracion.md.
+    const aptId = uuidv4();
 
-    await this.db.collection('appointments').doc(aptId).set(aptData);
+    const created = await this.appointmentsRepository.create(
+      {
+        vehicleId: dto.vehicleId,
+        chassis: vehicle['chassis'] as string,
+        model: vehicle['model'] as string,
+        color: (vehicle['color'] as string | undefined) ?? null,
+        sede: vehicle['sede'] as string,
+        clientName: (vehicle['clientName'] as string | undefined) ?? null,
+        clientId: (vehicle['clientId'] as string | undefined) ?? null,
+        scheduledDate: dto.scheduledDate,
+        scheduledTime: dto.scheduledTime,
+        assignedAdvisorId: dto.assignedAdvisorId,
+        assignedAdvisorName: dto.assignedAdvisorName,
+        status: 'AGENDADO',
+        createdBy: user.uid,
+        createdByName: user.displayName ?? user.email,
+        createdAt: now,
+        updatedAt: now,
+      },
+      aptId,
+    );
 
-    await this.vehiclesService.changeStatus(dto.vehicleId, VehicleStatus.AGENDADO, user, {
-      notes: `Entrega agendada por ${user.displayName ?? user.email} para el ${dto.scheduledDate} a las ${dto.scheduledTime}. Asesor: ${dto.assignedAdvisorName}`,
-      extraFields: { appointmentId: aptId },
-    });
+    await this.vehiclesService.changeStatus(
+      dto.vehicleId,
+      VehicleStatus.AGENDADO,
+      user,
+      {
+        notes: `Entrega agendada por ${user.displayName ?? user.email} para el ${dto.scheduledDate} a las ${dto.scheduledTime}. Asesor: ${dto.assignedAdvisorName}`,
+        extraFields: { appointmentId: created.id },
+      },
+    );
 
     await Promise.all([
       this.notificationsService.notify({
         type: 'AGENDADO',
         targetRole: RoleEnum.ASESOR,
-        targetSede: vehicle['sede'],
+        targetSede: vehicle['sede'] as string,
         title: '📅 Entrega agendada',
         body: `El vehículo ${vehicle['chassis']} fue agendado para el ${dto.scheduledDate} a las ${dto.scheduledTime}`,
         vehicleId: dto.vehicleId,
@@ -123,7 +158,11 @@ export class AppointmentsService {
       }),
     ]);
 
-    return { aptId, vehicleId: dto.vehicleId, newStatus: VehicleStatus.AGENDADO };
+    return {
+      aptId: created.id,
+      vehicleId: dto.vehicleId,
+      newStatus: VehicleStatus.AGENDADO,
+    };
   }
 
   /**
@@ -131,43 +170,46 @@ export class AppointmentsService {
    * Excluye citas CANCELADAS. Usado por el frontend para deshabilitar slots.
    */
   async getOccupiedSlots(advisorId: string, date: string): Promise<string[]> {
-    const snap = await this.db
-      .collection('appointments')
-      .where('assignedAdvisorId', '==', advisorId)
-      .where('scheduledDate', '==', date)
-      .get();
+    const appointments = await this.appointmentsRepository.findByAdvisorAndDate(
+      advisorId,
+      date,
+    );
 
-    return snap.docs
-      .map((d) => d.data())
-      .filter((d) => d['status'] !== 'CANCELADO')
-      .map((d) => d['scheduledTime'] as string);
+    return appointments
+      .filter((apt) => apt.status !== 'CANCELADO')
+      .map((apt) => apt.scheduledTime);
   }
 
   async findAll(user: AuthenticatedUser, filters: QueryAppointmentsDto) {
-    let query: FirebaseFirestore.Query = this.db.collection('appointments');
-    const dateFrom = filters.dateFrom;
-    const dateTo = filters.dateTo;
-    const vehicleId = filters.vehicleId;
+    const queryFilters: AppointmentQueryFilters = {
+      dateFrom: filters.dateFrom,
+      dateTo: filters.dateTo,
+    };
 
     // Si se filtra por vehicleId específico, omitir restricciones de rol/sede
-    // para que el asesor que ejecuta la ceremonia pueda encontrar la cita aunque
-    // no sea suya (ej: fue creada por otro asesor o desde el web).
-    if (vehicleId) {
-      query = query.where('vehicleId', '==', vehicleId);
-    } else if (user.role === RoleEnum.JEFE_TALLER || user.role === RoleEnum.SOPORTE || user.role === RoleEnum.SUPERVISOR) {
+    // para que el asesor que ejecuta la ceremonia pueda encontrar la cita
+    // aunque no sea suya (ej: fue creada por otro asesor o desde el web).
+    if (filters.vehicleId) {
+      queryFilters.vehicleId = filters.vehicleId;
+    } else if (
+      user.role === RoleEnum.JEFE_TALLER ||
+      user.role === RoleEnum.SOPORTE ||
+      user.role === RoleEnum.SUPERVISOR
+    ) {
       // Ve todo — sin restricción de sede
-    } else if (user.role === RoleEnum.LIDER_TECNICO || user.role === RoleEnum.PERSONAL_TALLER || user.role === RoleEnum.DOCUMENTACION) {
+    } else if (
+      user.role === RoleEnum.LIDER_TECNICO ||
+      user.role === RoleEnum.PERSONAL_TALLER ||
+      user.role === RoleEnum.DOCUMENTACION
+    ) {
       // Ve todas las citas de su sede
-      query = query.where('sede', '==', user.sede);
+      queryFilters.sede = user.sede;
     } else if (user.role === RoleEnum.ASESOR) {
       // Solo ve sus propias citas asignadas
-      query = query.where('assignedAdvisorId', '==', user.uid);
+      queryFilters.assignedAdvisorId = user.uid;
     } else {
-      query = query.where('sede', '==', user.sede);
+      queryFilters.sede = user.sede;
     }
-
-    if (dateFrom) query = query.where('scheduledDate', '>=', dateFrom);
-    if (dateTo) query = query.where('scheduledDate', '<=', dateTo);
 
     const pageRaw = filters.page ? Number(filters.page) : 1;
     const page = Number.isFinite(pageRaw) ? Math.max(1, pageRaw) : 1;
@@ -182,111 +224,30 @@ export class AppointmentsService {
       );
     }
 
-    let cursorScheduledDate: string | null = null;
-    let cursorScheduledTime: string | null = null;
-    let cursorDocId: string | null = null;
-    if (cursorRaw) {
-      try {
-        const parsed = JSON.parse(
-          Buffer.from(cursorRaw, 'base64').toString('utf8'),
-        ) as {
-          scheduledDate?: string;
-          scheduledTime?: string;
-          id?: string;
-        };
-        if (
-          typeof parsed.scheduledDate === 'string' &&
-          typeof parsed.scheduledTime === 'string' &&
-          typeof parsed.id === 'string' &&
-          parsed.id.trim().length > 0
-        ) {
-          cursorScheduledDate = parsed.scheduledDate;
-          cursorScheduledTime = parsed.scheduledTime;
-          cursorDocId = parsed.id;
-        } else {
-          throw new Error('cursor invalid structure');
-        }
-      } catch {
-        throw new BadRequestException('Cursor inválido para appointments');
-      }
-    }
+    let docs: Appointment[];
+    let total: number;
+    let nextCursor: string | null = null;
 
-    // Q6: orden estable para paginación
-    let ordered = query
-      .orderBy('scheduledDate', 'asc')
-      .orderBy('scheduledTime', 'asc')
-      .orderBy('__name__', 'asc');
-
-    if (cursorScheduledDate && cursorScheduledTime && cursorDocId) {
-      ordered = ordered.startAfter(
-        cursorScheduledDate,
-        cursorScheduledTime,
-        cursorDocId,
-      );
-    }
-
-    let total = 0;
-    let pageDocs: FirebaseFirestore.QueryDocumentSnapshot[] = [];
-    let hasMore = false;
     if (usePagination) {
-      const [countSnap, snapshot] = await Promise.all([
-        query.count().get(),
-        ordered.limit(limit + 1).get(),
+      const [countTotal, pageResult] = await Promise.all([
+        this.appointmentsRepository.countFiltered(queryFilters),
+        this.appointmentsRepository.paginateFiltered(queryFilters, {
+          limit,
+          cursor: cursorRaw,
+        }),
       ]);
-      total = countSnap.data().count;
-      hasMore = snapshot.docs.length > limit;
-      pageDocs = snapshot.docs.slice(0, limit);
+      total = countTotal;
+      docs = pageResult.items;
+      nextCursor = pageResult.nextCursor;
     } else {
-      const snapshot = await ordered.get();
-      pageDocs = snapshot.docs;
-      total = pageDocs.length;
+      docs = await this.appointmentsRepository.listAll(queryFilters);
+      total = docs.length;
     }
 
-    let docs = pageDocs.map((d) => d.data());
-
-    // ── Retrocompatibilidad: enriquecer docs legacy que les falten campos del vehículo ──
-    // Aplica a docs que no tengan clientName O que no tengan color (campo añadido después).
-    const missing = docs.filter(
-      (d) => (!d['clientName'] || !d['color']) && d['vehicleId'],
-    );
-    if (missing.length > 0) {
-      const vehicleIds = [...new Set(missing.map((d) => d['vehicleId'] as string))];
-      const vehicleSnaps = await Promise.all(
-        vehicleIds.map((vid) => this.db.collection('vehicles').doc(vid).get()),
-      );
-      const vehicleMap = new Map(
-        vehicleSnaps.filter((s) => s.exists).map((s) => [s.id, s.data()]),
-      );
-      docs = docs.map((d) => {
-        if (d['clientName'] && d['color']) return d;
-        const v = vehicleMap.get(d['vehicleId'] as string);
-        if (!v) return d;
-        return {
-          ...d,
-          clientName: d['clientName'] || (v['clientName'] ?? null),
-          clientId:   d['clientId']   || (v['clientId']   ?? null),
-          color:      d['color']      || (v['color']      ?? null),
-          model:      d['model']      || (v['model']      ?? null),
-        };
-      });
-    }
-    // ─────────────────────────────────────────────────────────────────────────────────
+    docs = await this.enrichLegacyDocs(docs);
 
     if (!usePagination) {
       return docs;
-    }
-
-    let nextCursor: string | null = null;
-    const lastDoc = pageDocs.at(-1);
-    if (lastDoc && usePagination && pageDocs.length === limit && hasMore) {
-      nextCursor = Buffer.from(
-        JSON.stringify({
-          scheduledDate: lastDoc.get('scheduledDate') as string,
-          scheduledTime: lastDoc.get('scheduledTime') as string,
-          id: lastDoc.id,
-        }),
-        'utf8',
-      ).toString('base64');
     }
 
     return {
@@ -298,17 +259,50 @@ export class AppointmentsService {
     };
   }
 
-  async update(aptId: string, dto: UpdateAppointmentDto, user: AuthenticatedUser) {
-    const doc = await this.db.collection('appointments').doc(aptId).get();
-    if (!doc.exists) throw new NotFoundException('Agendamiento no encontrado');
+  /**
+   * Retrocompatibilidad: enriquece agendamientos legacy a los que les falte
+   * `clientName` o `color` (campos añadidos después de que ya existieran
+   * agendamientos viejos sin ellos), leyendo el vehículo asociado.
+   *
+   * Usa `AppointmentVehicleBridgeRepository` — el único punto donde este
+   * servicio toca `vehicles`, que todavía no migró a scope de tenant.
+   */
+  private async enrichLegacyDocs(docs: Appointment[]): Promise<Appointment[]> {
+    const missing = docs.filter(
+      (d) => (!d.clientName || !d.color) && d.vehicleId,
+    );
+    if (missing.length === 0) return docs;
 
-    const apt = doc.data()!;
+    const vehicleIds = [...new Set(missing.map((d) => d.vehicleId))];
+    const vehicleMap = await this.vehicleBridge.findManyAccessible(vehicleIds);
+
+    return docs.map((d) => {
+      if (d.clientName && d.color) return d;
+      const v = vehicleMap.get(d.vehicleId);
+      if (!v) return d;
+      return {
+        ...d,
+        clientName: d.clientName || ((v['clientName'] as string) ?? null),
+        clientId: d.clientId || ((v['clientId'] as string) ?? null),
+        color: d.color || ((v['color'] as string) ?? null),
+        model: d.model || ((v['model'] as string) ?? null),
+      };
+    });
+  }
+
+  async update(
+    aptId: string,
+    dto: UpdateAppointmentDto,
+    user: AuthenticatedUser,
+  ) {
+    const existing = await this.appointmentsRepository.findById(aptId);
+    if (!existing) throw new NotFoundException('Agendamiento no encontrado');
 
     // ── Verificar conflicto de horario al reagendar ────────────────────────
     // Only validate if date or time is actually changing.
-    const newDate = dto.scheduledDate ?? apt['scheduledDate'];
-    const newTime = dto.scheduledTime ?? apt['scheduledTime'];
-    const newAdvisorId = dto.assignedAdvisorId ?? apt['assignedAdvisorId'];
+    const newDate = dto.scheduledDate ?? existing.scheduledDate;
+    const newTime = dto.scheduledTime ?? existing.scheduledTime;
+    const newAdvisorId = dto.assignedAdvisorId ?? existing.assignedAdvisorId;
 
     if (
       dto.scheduledDate !== undefined ||
@@ -319,33 +313,45 @@ export class AppointmentsService {
     }
     // ──────────────────────────────────────────────────────────────────────
 
-    await this.db.collection('appointments').doc(aptId).update({
-      ...Object.fromEntries(Object.entries(dto).filter(([, v]) => v !== undefined)),
+    const changes = {
+      ...Object.fromEntries(
+        Object.entries(dto).filter(([, v]) => v !== undefined),
+      ),
       // Reset reminder if date or time changed, so the cron sends a new one
       ...(dto.scheduledDate !== undefined || dto.scheduledTime !== undefined
         ? { reminderSentAt: null }
         : {}),
       updatedAt: this.firebase.serverTimestamp(),
-    });
+    } as Partial<Omit<Appointment, 'tenantId' | 'id'>>;
+
+    const updated = await this.appointmentsRepository.update(aptId, changes);
+    if (!updated) throw new NotFoundException('Agendamiento no encontrado');
 
     // Audit trail en statusHistory del vehículo
-    const changes: string[] = [];
-    if (dto.scheduledDate && dto.scheduledDate !== apt['scheduledDate'])
-      changes.push(`fecha: ${apt['scheduledDate']} → ${dto.scheduledDate}`);
-    if (dto.scheduledTime && dto.scheduledTime !== apt['scheduledTime'])
-      changes.push(`hora: ${apt['scheduledTime']} → ${dto.scheduledTime}`);
-    if (dto.assignedAdvisorName && dto.assignedAdvisorName !== apt['assignedAdvisorName'])
-      changes.push(`asesor: ${apt['assignedAdvisorName']} → ${dto.assignedAdvisorName}`);
+    const changesLog: string[] = [];
+    if (dto.scheduledDate && dto.scheduledDate !== existing.scheduledDate)
+      changesLog.push(
+        `fecha: ${existing.scheduledDate} → ${dto.scheduledDate}`,
+      );
+    if (dto.scheduledTime && dto.scheduledTime !== existing.scheduledTime)
+      changesLog.push(`hora: ${existing.scheduledTime} → ${dto.scheduledTime}`);
+    if (
+      dto.assignedAdvisorName &&
+      dto.assignedAdvisorName !== existing.assignedAdvisorName
+    )
+      changesLog.push(
+        `asesor: ${existing.assignedAdvisorName} → ${dto.assignedAdvisorName}`,
+      );
 
-    if (changes.length && apt['vehicleId']) {
-      await this.vehiclesService.assertExists(apt['vehicleId']);
+    if (changesLog.length && existing.vehicleId) {
+      await this.vehiclesService.assertExists(existing.vehicleId);
       await this.vehiclesService.addStatusHistory(
-        apt['vehicleId'],
+        existing.vehicleId,
         VehicleStatus.AGENDADO,
         VehicleStatus.AGENDADO,
         user,
         user.sede,
-        `Reagendamiento por ${user.displayName ?? user.email}: ${changes.join(', ')}`,
+        `Reagendamiento por ${user.displayName ?? user.email}: ${changesLog.join(', ')}`,
       );
     }
 

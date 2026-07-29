@@ -5,18 +5,29 @@ import { AuthService } from './auth.service';
 import { FirebaseAuthGuard } from '../../common/guards/firebase-auth.guard';
 import { RefreshTokenGuard } from './refresh-token.guard';
 import { ExecutionContext } from '@nestjs/common';
+import { IS_TENANT_EXEMPT } from '../../common/decorators/tenant-exempt.decorator';
+import { RefreshTokenDocument } from './refresh-token.service';
+import { AuthenticatedUser } from '../../common/interfaces/authenticated-user.interface';
 
 // ---------------------------------------------------------------------------
 // Guard mocks — always pass and inject test data into request
 // ---------------------------------------------------------------------------
 
+interface RequestWithUser {
+  user?: Partial<AuthenticatedUser>;
+}
+
+interface RequestWithRefreshTokenDoc {
+  refreshTokenDoc?: Partial<RefreshTokenDocument>;
+}
+
 const mockFirebaseAuthGuard = {
   canActivate: (ctx: ExecutionContext) => {
-    const req = ctx.switchToHttp().getRequest();
+    const req = ctx.switchToHttp().getRequest<RequestWithUser>();
     req.user = {
       uid: 'test-uid',
       email: 'test@test.com',
-      role: 'ASESOR',
+      role: 'ASESOR' as AuthenticatedUser['role'],
       active: true,
     };
     return true;
@@ -25,7 +36,7 @@ const mockFirebaseAuthGuard = {
 
 const mockRefreshTokenGuard = {
   canActivate: (ctx: ExecutionContext) => {
-    const req = ctx.switchToHttp().getRequest();
+    const req = ctx.switchToHttp().getRequest<RequestWithRefreshTokenDoc>();
     req.refreshTokenDoc = {
       tokenId: 'token-id-1',
       uid: 'test-uid',
@@ -85,7 +96,9 @@ describe('AuthController', () => {
       mockAuthService.refresh.mockResolvedValueOnce(serviceResult);
 
       const refreshTokenDoc = { tokenId: 'token-id-1', uid: 'test-uid' };
-      const req = { refreshTokenDoc } as any;
+      const req = { refreshTokenDoc } as unknown as Request & {
+        refreshTokenDoc: RefreshTokenDocument;
+      };
 
       const result = await controller.refresh(
         { refreshToken: 'token-id-1' },
@@ -124,7 +137,9 @@ describe('AuthController', () => {
       mockAuthService.logout.mockResolvedValueOnce(undefined);
 
       const refreshTokenDoc = { tokenId: 'token-id-1' };
-      const req = { refreshTokenDoc } as any;
+      const req = { refreshTokenDoc } as unknown as Request & {
+        refreshTokenDoc: RefreshTokenDocument;
+      };
 
       const result = await controller.logout(
         { refreshToken: 'token-id-1' },
@@ -159,7 +174,9 @@ describe('AuthController', () => {
     it('should return message and count of revoked sessions', async () => {
       mockAuthService.logoutAll.mockResolvedValueOnce(2);
 
-      const req = { user: { uid: 'test-uid' } } as any;
+      const req = { user: { uid: 'test-uid' } } as unknown as Request & {
+        user: AuthenticatedUser;
+      };
       const result = await controller.logoutAll(req);
 
       expect(result).toEqual({
@@ -207,6 +224,42 @@ describe('AuthController', () => {
       expect(result).toEqual(serviceResult);
       expect(result.expiresIn).toBe(43200);
       expect(mockAuthService.login).toHaveBeenCalledWith(dto);
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // TEST 8: @TenantExempt() — qué rutas están exentas de TenantGuard y cuáles no
+  //
+  // login, forgot-password, refresh y logout corren SIN contexto de tenant
+  // posible (ver docblock de la clase) y deben quedar marcadas. logout-all sí
+  // pasa por FirebaseAuthGuard, así que TenantGuard puede validarla
+  // normalmente: NO debe llevar el decorador.
+  // -------------------------------------------------------------------------
+  describe('@TenantExempt()', () => {
+    const isExempt = (methodName: keyof AuthController) =>
+      Reflect.getMetadata(
+        IS_TENANT_EXEMPT,
+        AuthController.prototype[methodName] as unknown as object,
+      ) === true;
+
+    it('login está exenta de TenantGuard', () => {
+      expect(isExempt('login')).toBe(true);
+    });
+
+    it('forgotPassword está exenta de TenantGuard', () => {
+      expect(isExempt('forgotPassword')).toBe(true);
+    });
+
+    it('refresh está exenta de TenantGuard', () => {
+      expect(isExempt('refresh')).toBe(true);
+    });
+
+    it('logout está exenta de TenantGuard', () => {
+      expect(isExempt('logout')).toBe(true);
+    });
+
+    it('logoutAll NO está exenta — pasa por FirebaseAuthGuard y sí tiene req.user.tenantId', () => {
+      expect(isExempt('logoutAll')).toBe(false);
     });
   });
 });

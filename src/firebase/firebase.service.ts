@@ -55,6 +55,24 @@ export class FirebaseService implements OnModuleInit {
     return this.app.auth();
   }
 
+  /**
+   * Acceso sin filtrar a Firestore. Reservado para la capa de repositorios.
+   *
+   * El nombre es deliberadamente incómodo: cualquier uso salta a la vista en
+   * un diff. Fuera de `src/common/repositories/**`, `src/modules/tenants/**` y
+   * `src/modules/audit/**` está prohibido por la regla de ESLint
+   * `no-restricted-syntax` — usá un TenantScopedRepository.
+   * Ver docs/design/01-multi-tenancy.md D-105.
+   */
+  rawFirestore(): admin.firestore.Firestore {
+    return this.app.firestore();
+  }
+
+  /**
+   * @deprecated Acceso directo sin scope de tenant. Cada módulo que migra a
+   * TenantScopedRepository elimina sus usos y sale de la lista de excepciones
+   * en eslint.config.mjs. Cuando no queden usos, este método se borra.
+   */
   firestore(): admin.firestore.Firestore {
     return this.app.firestore();
   }

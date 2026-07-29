@@ -9,6 +9,15 @@ import { FirebaseService } from '../../firebase/firebase.service';
 import { VehiclesService } from '../vehicles/vehicles.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import {
+  ServiceOrdersRepository,
+  ServiceOrderDocument,
+  OrderAccessory,
+  ChecklistItem,
+  OrderPrediction,
+} from './service-orders.repository';
+import { VehicleFieldsRepository } from './vehicle-fields.repository';
+import { DocumentationLookupRepository } from './documentation-lookup.repository';
+import {
   CreateServiceOrderDto,
   AssignTechnicianDto,
   UpdateChecklistDto,
@@ -21,29 +30,21 @@ import {
   AccessoryKey,
 } from '../../common/enums/accessory-key.enum';
 import { AuthenticatedUser } from '../../common/interfaces/authenticated-user.interface';
-import { v4 as uuidv4 } from 'uuid';
 import { SedeEnum } from '../../common/enums/sede.enum';
+import { v4 as uuidv4 } from 'uuid';
 
 @Injectable()
 export class ServiceOrdersService {
   private readonly logger = new Logger(ServiceOrdersService.name);
 
-  /** Caché TTL para documentations (full-scan costoso) */
-  private docsCache: {
-    data: Array<{ id: string; accessories: Array<{ key: string; classification: string }> }>;
-    ts: number;
-  } | null = null;
-  private readonly docsCacheTtlMs = 5 * 60 * 1000; // 5 minutos
-
   constructor(
     private readonly firebase: FirebaseService,
     private readonly vehiclesService: VehiclesService,
     private readonly notificationsService: NotificationsService,
+    private readonly serviceOrders: ServiceOrdersRepository,
+    private readonly vehicleFields: VehicleFieldsRepository,
+    private readonly documentationLookup: DocumentationLookupRepository,
   ) {}
-
-  private get db() {
-    return this.firebase.firestore();
-  }
 
   private generateOrderNumber(sede: string): string {
     const dateStr = new Date().toISOString().slice(0, 10).replace(/-/g, '');
@@ -72,13 +73,12 @@ export class ServiceOrdersService {
       );
     }
 
-    // Obtener accesorios vendidos/obsequiados de documentación
-    let docSnap: FirebaseFirestore.DocumentSnapshot;
+    // Obtener accesorios vendidos/obsequiados de documentación. El puente
+    // devuelve `null` tanto si no existe como si es de otro concesionario —
+    // en ambos casos, para este tenant, "no hay documentación registrada".
+    let docData: Record<string, unknown> | null;
     try {
-      docSnap = await this.db
-        .collection('documentations')
-        .doc(dto.vehicleId)
-        .get();
+      docData = await this.documentationLookup.findByVehicleId(dto.vehicleId);
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
       this.logger.error(
@@ -86,22 +86,23 @@ export class ServiceOrdersService {
       );
       throw err;
     }
-    if (!docSnap.exists)
+    if (!docData)
       throw new BadRequestException(
         'El vehículo no tiene documentación registrada',
       );
 
-    const docData = docSnap.data()!;
     const rawAccessories = docData['accessories'];
-    const accessories: Array<{ key: string; classification: string }> =
-      Array.isArray(rawAccessories) ? rawAccessories : [];
+    const accessories: OrderAccessory[] = Array.isArray(rawAccessories)
+      ? (rawAccessories as OrderAccessory[])
+      : [];
     const orderAccessories = accessories.filter(
       (a) =>
         a.classification === AccessoryClassification.VENDIDO ||
         a.classification === AccessoryClassification.OBSEQUIADO,
     );
 
-    // Algoritmo de predicción
+    // Algoritmo de predicción — acotado al concesionario activo, ver
+    // DocumentationLookupRepository.findRecentForActiveTenant().
     const predictions = await this.runPrediction(
       orderAccessories,
       dto.vehicleId,
@@ -114,12 +115,11 @@ export class ServiceOrdersService {
       this.generateOrderNumber(vehicle['sede'] as string);
     const now = this.firebase.serverTimestamp();
 
-    const orderData = {
-      id: orderId,
+    const orderData: Omit<ServiceOrderDocument, 'tenantId' | 'id'> = {
       orderNumber,
       vehicleId: dto.vehicleId,
-      sede: vehicle['sede'],
-      chassis: vehicle['chassis'],
+      sede: vehicle['sede'] as string,
+      chassis: vehicle['chassis'] as string,
       accessories: orderAccessories,
       predictions,
       checklist: orderAccessories.map((a) => ({
@@ -138,7 +138,10 @@ export class ServiceOrdersService {
       updatedAt: now,
     };
 
-    await this.db.collection('service-orders').doc(orderId).set(orderData);
+    // El id del documento se genera acá (uuid) en vez de dejar que Firestore
+    // lo autoasigne, porque orderId se usa para responder al cliente antes
+    // de que la escritura confirme.
+    await this.serviceOrders.create(orderData, orderId);
 
     await this.vehiclesService.changeStatus(
       dto.vehicleId,
@@ -189,7 +192,9 @@ export class ServiceOrdersService {
       limit?: number;
     },
   ) {
-    let query: FirebaseFirestore.Query = this.db.collection('service-orders');
+    // La query base ya viene acotada al tenant activo — el repositorio
+    // inyecta el where('tenantId', ...) que antes no existía.
+    let query = this.serviceOrders.query();
 
     // PERSONAL_TALLER solo ve sus OTs asignadas
     if (user.role === RoleEnum.PERSONAL_TALLER) {
@@ -209,10 +214,10 @@ export class ServiceOrdersService {
     // Sin where adicionales para status para evitar índices compuestos — filtrar en memoria
     const snapshot = await query.get();
     let results = snapshot.docs
-      .map((d) => d.data())
+      .map((d) => ({ id: d.id, ...d.data() }) as ServiceOrderDocument)
       .sort((a, b) => {
-        const aTs = a['createdAt']?._seconds ?? 0;
-        const bTs = b['createdAt']?._seconds ?? 0;
+        const aTs = (a['createdAt'] as any)?._seconds ?? 0;
+        const bTs = (b['createdAt'] as any)?._seconds ?? 0;
         return bTs - aTs;
       });
 
@@ -222,9 +227,7 @@ export class ServiceOrdersService {
         .split(',')
         .map((s) => s.trim())
         .filter(Boolean);
-      results = results.filter((d) =>
-        statusList.includes(d['status'] as string),
-      );
+      results = results.filter((d) => statusList.includes(d.status));
     }
 
     const total = results.length;
@@ -236,11 +239,11 @@ export class ServiceOrdersService {
     return { data, total, page, limit, totalPages };
   }
 
-  async findOne(id: string) {
-    const doc = await this.db.collection('service-orders').doc(id).get();
-    if (!doc.exists)
-      throw new NotFoundException('Orden de trabajo no encontrada');
-    return doc.data();
+  async findOne(id: string): Promise<ServiceOrderDocument> {
+    return this.serviceOrders.findByIdOrThrow(
+      id,
+      () => new NotFoundException('Orden de trabajo no encontrada'),
+    );
   }
 
   async assignTechnician(
@@ -259,25 +262,23 @@ export class ServiceOrdersService {
     }
 
     const order = await this.findOne(orderId);
-    const vehicle = await this.vehiclesService.assertExists(
-      order!['vehicleId'],
-    );
+    const vehicle = await this.vehiclesService.assertExists(order.vehicleId);
 
     const allowedOrderStatuses = ['GENERADA', 'ASIGNADA', 'EN_INSTALACION'];
-    if (!allowedOrderStatuses.includes(order!['status'])) {
+    if (!allowedOrderStatuses.includes(order.status)) {
       throw new BadRequestException(
-        `La OT debe estar en estado GENERADA, ASIGNADA o EN_INSTALACION para asignar técnico. Estado actual: ${order!['status']}`,
+        `La OT debe estar en estado GENERADA, ASIGNADA o EN_INSTALACION para asignar técnico. Estado actual: ${order.status}`,
       );
     }
 
     const previousTechnicianId: string | null =
-      order!['assignedTechnicianId'] ?? null;
+      order.assignedTechnicianId ?? null;
     const previousTechnicianName: string | null =
-      order!['assignedTechnicianName'] ?? null;
+      order.assignedTechnicianName ?? null;
     const isReassignment =
       !!previousTechnicianId && previousTechnicianId !== dto.technicianUid;
 
-    await this.db.collection('service-orders').doc(orderId).update({
+    await this.serviceOrders.update(orderId, {
       assignedTechnicianId: dto.technicianUid,
       assignedTechnicianName: dto.technicianName,
       assignedAt: this.firebase.serverTimestamp(),
@@ -297,22 +298,27 @@ export class ServiceOrdersService {
     if (vehicleAlreadyAdvanced) {
       // El vehículo ya avanzó más allá de ASIGNADO — solo actualizamos los campos
       // del técnico sin retroceder ni re-escribir el estado
-      await this.db.collection('vehicles').doc(order!['vehicleId']).update({
+      await this.vehicleFields.updateFields(order.vehicleId, {
         assignedTechnicianId: dto.technicianUid,
         assignedTechnicianName: dto.technicianName,
         updatedAt: this.firebase.serverTimestamp(),
       });
       await this.vehiclesService.addStatusHistory(
-        order!['vehicleId'],
+        order.vehicleId,
         currentVehicleStatus,
         currentVehicleStatus,
         user,
-        order!['sede'],
+        // ServiceOrderDocument tipa `sede` como string (D-107 la retira del
+        // dominio vía SedeEnum), pero VehiclesService.addStatusHistory —
+        // sin migrar todavía — sigue exigiendo el enum. Cast acotado a este
+        // único punto de fricción, sin reintroducir SedeEnum en el resto
+        // del servicio.
+        order.sede as SedeEnum,
         historyNote,
       );
     } else {
       await this.vehiclesService.changeStatus(
-        order!['vehicleId'],
+        order.vehicleId,
         VehicleStatus.ASIGNADO,
         user,
         {
@@ -330,10 +336,10 @@ export class ServiceOrdersService {
       this.notificationsService.notify({
         type: 'TECNICO_ASIGNADO',
         targetRole: RoleEnum.PERSONAL_TALLER,
-        targetSede: order!['sede'],
+        targetSede: order.sede,
         title: '🔨 Nueva asignación de instalación',
         body: notifBody,
-        vehicleId: order!['vehicleId'],
+        vehicleId: order.vehicleId,
         chassis: vehicle['chassis'] as string,
         data: { technicianId: dto.technicianUid },
       }),
@@ -345,10 +351,10 @@ export class ServiceOrdersService {
         this.notificationsService.notify({
           type: 'TECNICO_REMOVIDO',
           targetRole: RoleEnum.PERSONAL_TALLER,
-          targetSede: order!['sede'],
+          targetSede: order.sede,
           title: '⚠️ Reasignación de OT',
           body: `El vehículo ${vehicle['chassis']} fue reasignado a otro técnico`,
-          vehicleId: order!['vehicleId'],
+          vehicleId: order.vehicleId,
           chassis: vehicle['chassis'] as string,
           data: { technicianId: previousTechnicianId },
         }),
@@ -371,22 +377,21 @@ export class ServiceOrdersService {
     const order = await this.findOne(orderId);
 
     const allowedOrderStatuses = ['ASIGNADA', 'EN_INSTALACION'];
-    if (!allowedOrderStatuses.includes(order!['status'])) {
+    if (!allowedOrderStatuses.includes(order.status)) {
       throw new BadRequestException(
-        `No se puede actualizar el checklist desde el estado '${order!['status']}'. Estado requerido: ASIGNADA o EN_INSTALACION`,
+        `No se puede actualizar el checklist desde el estado '${order.status}'. Estado requerido: ASIGNADA o EN_INSTALACION`,
       );
     }
 
     const isOverrideRole =
       user.role === RoleEnum.JEFE_TALLER || user.role === RoleEnum.SOPORTE;
-    if (order!['assignedTechnicianId'] !== user.uid && !isOverrideRole) {
+    if (order.assignedTechnicianId !== user.uid && !isOverrideRole) {
       throw new ForbiddenException(
         'Solo el técnico asignado puede marcar la instalación',
       );
     }
 
-    const checklist: Array<{ key: string; installed: boolean }> =
-      order!['checklist'] ?? [];
+    const checklist: ChecklistItem[] = order.checklist ?? [];
     const idx = checklist.findIndex((c) => c.key === dto.accessoryKey);
     if (idx === -1)
       throw new NotFoundException(
@@ -400,13 +405,13 @@ export class ServiceOrdersService {
       ? 'INSTALACION_COMPLETA'
       : 'EN_INSTALACION';
 
-    await this.db.collection('service-orders').doc(orderId).update({
+    await this.serviceOrders.update(orderId, {
       checklist,
       status: newOrderStatus,
       updatedAt: this.firebase.serverTimestamp(),
     });
 
-    const vehicleId = order!['vehicleId'];
+    const vehicleId = order.vehicleId;
     const vehicle = await this.vehiclesService.assertExists(vehicleId);
 
     const vehicleNewStatus = allInstalled
@@ -430,7 +435,7 @@ export class ServiceOrdersService {
         this.notificationsService.notify({
           type: 'INSTALACION_LISTA',
           targetRole: RoleEnum.LIDER_TECNICO,
-          targetSede: order!['sede'],
+          targetSede: order.sede,
           title: '✅ Instalación completada',
           body: `El vehículo ${vehicle['chassis']} completó la instalación de accesorios`,
           vehicleId,
@@ -451,12 +456,12 @@ export class ServiceOrdersService {
       await this.notificationsService.notify({
         type: 'INICIO_INSTALACION',
         targetRole: RoleEnum.PERSONAL_TALLER,
-        targetSede: order!['sede'],
+        targetSede: order.sede,
         title: '🔧 Instalación en curso',
         body: `Accesorio '${dto.accessoryKey}' instalado en vehículo ${vehicle['chassis']}`,
         vehicleId,
         chassis: vehicle['chassis'] as string,
-        data: { technicianId: order!['assignedTechnicianId'] ?? '' },
+        data: { technicianId: order.assignedTechnicianId ?? '' },
       });
     }
 
@@ -480,9 +485,7 @@ export class ServiceOrdersService {
     }
 
     const order = await this.findOne(orderId);
-    const vehicle = await this.vehiclesService.assertExists(
-      order!['vehicleId'],
-    );
+    const vehicle = await this.vehiclesService.assertExists(order.vehicleId);
 
     if (vehicle['status'] !== VehicleStatus.INSTALACION_COMPLETA) {
       throw new BadRequestException(
@@ -490,13 +493,13 @@ export class ServiceOrdersService {
       );
     }
 
-    await this.db.collection('service-orders').doc(orderId).update({
+    await this.serviceOrders.update(orderId, {
       status: 'LISTO_PARA_ENTREGA',
       updatedAt: this.firebase.serverTimestamp(),
     });
 
     await this.vehiclesService.changeStatus(
-      order!['vehicleId'],
+      order.vehicleId,
       VehicleStatus.LISTO_PARA_ENTREGA,
       user,
       {
@@ -508,10 +511,10 @@ export class ServiceOrdersService {
       this.notificationsService.notify({
         type: 'LISTO_ENTREGA',
         targetRole: RoleEnum.ASESOR,
-        targetSede: order!['sede'],
+        targetSede: order.sede,
         title: '🚗 Vehículo listo para entrega',
         body: `El vehículo ${vehicle['chassis']} está listo para agendar entrega`,
-        vehicleId: order!['vehicleId'],
+        vehicleId: order.vehicleId,
         chassis: vehicle['chassis'] as string,
       }),
       this.notificationsService.notify({
@@ -520,14 +523,14 @@ export class ServiceOrdersService {
         targetSede: 'ALL',
         title: '🚗 Vehículo listo para entrega',
         body: `El vehículo ${vehicle['chassis']} está listo para agendar entrega`,
-        vehicleId: order!['vehicleId'],
+        vehicleId: order.vehicleId,
         chassis: vehicle['chassis'] as string,
       }),
     ]);
 
     return {
       orderId,
-      vehicleId: order!['vehicleId'],
+      vehicleId: order.vehicleId,
       newStatus: VehicleStatus.LISTO_PARA_ENTREGA,
     };
   }
@@ -550,17 +553,14 @@ export class ServiceOrdersService {
     const now = this.firebase.serverTimestamp();
 
     // Guardar info de reapertura en el vehículo para que documentación la consuma
-    await this.db
-      .collection('vehicles')
-      .doc(dto.vehicleId)
-      .update({
-        isReopening: true,
-        reopenReason: dto.reason,
-        reopenAccessories: dto.newAccessories,
-        reopenRequestedBy: user.uid,
-        reopenRequestedByName: user.displayName ?? user.email,
-        reopenRequestedAt: now,
-      });
+    await this.vehicleFields.updateFields(dto.vehicleId, {
+      isReopening: true,
+      reopenReason: dto.reason,
+      reopenAccessories: dto.newAccessories,
+      reopenRequestedBy: user.uid,
+      reopenRequestedByName: user.displayName ?? user.email,
+      reopenRequestedAt: now,
+    });
 
     // Cambiar estado a DOCUMENTACION_PENDIENTE (el statusHistory registra el motivo)
     await this.vehiclesService.changeStatus(
@@ -614,24 +614,22 @@ export class ServiceOrdersService {
     };
   }
 
-  async getPredictions(vehicleId: string) {
-    const docSnap = await this.db
-      .collection('documentations')
-      .doc(vehicleId)
-      .get();
-    if (!docSnap.exists) return [];
+  async getPredictions(vehicleId: string): Promise<OrderPrediction[]> {
+    const docData = await this.documentationLookup.findByVehicleId(vehicleId);
+    if (!docData) return [];
 
-    const raw = docSnap.data()!['accessories'];
-    const accessories: Array<{ key: string; classification: string }> =
-      Array.isArray(raw) ? raw : [];
+    const raw = docData['accessories'];
+    const accessories: OrderAccessory[] = Array.isArray(raw)
+      ? (raw as OrderAccessory[])
+      : [];
     return this.runPrediction(accessories, vehicleId);
   }
 
   /** Algoritmo de predicción de accesorios basado en patrones históricos */
   private async runPrediction(
-    currentAccessories: Array<{ key: string; classification: string }>,
+    currentAccessories: OrderAccessory[],
     vehicleId: string,
-  ): Promise<Array<{ key: string; probability: number; reason: string }>> {
+  ): Promise<OrderPrediction[]> {
     const threshold = Number(process.env.PREDICTION_THRESHOLD ?? 40);
 
     const soldKeys = currentAccessories
@@ -644,9 +642,12 @@ export class ServiceOrdersService {
 
     if (soldKeys.length === 0) return [];
 
-    // Obtener todos los vehículos con documentación (con caché TTL 5 min),
-    // excluyendo el vehículo actual para no contaminar el historial con sus propios datos.
-    const allDocs = await this.getCachedDocAccessories();
+    // Obtener las documentaciones históricas del concesionario ACTIVO
+    // únicamente (con caché TTL de 5 min indexada por tenant — ver
+    // DocumentationLookupRepository), excluyendo el vehículo actual para no
+    // contaminar el historial con sus propios datos.
+    const allDocs =
+      await this.documentationLookup.findRecentForActiveTenant(500);
     const otherDocs = allDocs
       .filter((entry) => entry.id !== vehicleId)
       .map((entry) => entry.accessories);
@@ -673,11 +674,7 @@ export class ServiceOrdersService {
       (k) => !soldKeys.includes(k),
     );
 
-    const predictions: Array<{
-      key: string;
-      probability: number;
-      reason: string;
-    }> = [];
+    const predictions: OrderPrediction[] = [];
 
     for (const key of notCurrentKeys) {
       const count = similar.filter((acc) =>
@@ -692,7 +689,7 @@ export class ServiceOrdersService {
       const probability = Math.round((count / similar.length) * 100);
       if (probability >= threshold) {
         predictions.push({
-          key: key as string,
+          key: key,
           probability,
           reason: `El ${probability}% de clientes con accesorios similares también adquirieron ${key}`,
         });
@@ -715,28 +712,29 @@ export class ServiceOrdersService {
     const isOverrideRole =
       user.role === RoleEnum.JEFE_TALLER || user.role === RoleEnum.SOPORTE;
     const order = await this.findOne(orderId);
-    if (order!['assignedTechnicianId'] !== user.uid && !isOverrideRole) {
+    if (order.assignedTechnicianId !== user.uid && !isOverrideRole) {
       throw new ForbiddenException(
         'Solo el técnico asignado puede finalizar la instalación',
       );
     }
     const allowedStatuses = ['ASIGNADA', 'EN_INSTALACION'];
-    if (!allowedStatuses.includes(order!['status'])) {
+    if (!allowedStatuses.includes(order.status)) {
       throw new BadRequestException(
-        `La OT debe estar en estado ASIGNADA o EN_INSTALACION para finalizarla. Estado actual: ${order!['status']}`,
+        `La OT debe estar en estado ASIGNADA o EN_INSTALACION para finalizarla. Estado actual: ${order.status}`,
       );
     }
     const now = this.firebase.serverTimestamp();
     // Marcar todos los ítems del checklist como instalados (si los hay)
-    const checklist: Array<{ key: string; installed: boolean }> = (
-      order!['checklist'] ?? []
-    ).map((c: any) => ({ ...c, installed: true }));
-    await this.db.collection('service-orders').doc(orderId).update({
+    const checklist: ChecklistItem[] = (order.checklist ?? []).map((c) => ({
+      ...c,
+      installed: true,
+    }));
+    await this.serviceOrders.update(orderId, {
       checklist,
       status: 'INSTALACION_COMPLETA',
       updatedAt: now,
     });
-    const vehicleId = order!['vehicleId'];
+    const vehicleId = order.vehicleId;
     const vehicle = await this.vehiclesService.assertExists(vehicleId);
     await this.vehiclesService.changeStatus(
       vehicleId,
@@ -754,7 +752,7 @@ export class ServiceOrdersService {
       this.notificationsService.notify({
         type: 'INSTALACION_LISTA',
         targetRole: RoleEnum.LIDER_TECNICO,
-        targetSede: order!['sede'],
+        targetSede: order.sede,
         title: '✅ Instalación completada',
         body: `El vehículo ${vehicle['chassis']} completó la instalación`,
         vehicleId,
@@ -774,34 +772,5 @@ export class ServiceOrdersService {
       `Instalación finalizada manualmente en OT ${orderId} por ${user.uid}`,
     );
     return await this.findOne(orderId);
-  }
-
-  private async getCachedDocAccessories(): Promise<
-    Array<{ id: string; accessories: Array<{ key: string; classification: string }> }>
-  > {
-    const now = Date.now();
-    if (!this.docsCache || now - this.docsCache.ts > this.docsCacheTtlMs) {
-      const snap = await this.db
-        .collection('documentations')
-        .orderBy('createdAt', 'desc')
-        .limit(500)
-        .get();
-      this.docsCache = {
-        data: snap.docs
-          .map((d) => {
-            const raw = d.data()?.['accessories'];
-            const accessories = Array.isArray(raw)
-              ? (raw as Array<{ key: string; classification: string }>)
-              : [];
-            return { id: d.id, accessories };
-          })
-          .filter((entry) => entry.accessories.length > 0),
-        ts: now,
-      };
-      this.logger.debug(
-        `[docsCache] refrescado — ${this.docsCache.data.length} docs`,
-      );
-    }
-    return this.docsCache.data;
   }
 }
